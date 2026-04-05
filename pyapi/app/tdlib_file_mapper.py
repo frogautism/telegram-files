@@ -17,6 +17,82 @@ def _safe_td_file(td_file: Any) -> dict[str, Any] | None:
     return td_file if isinstance(td_file, dict) else None
 
 
+def _thumbnail_mime_type(
+    thumbnail: dict[str, Any] | None,
+    default: str = "image/jpeg",
+) -> str:
+    if not isinstance(thumbnail, dict):
+        return default
+    format_payload = (
+        thumbnail.get("format") if isinstance(thumbnail.get("format"), dict) else {}
+    )
+    format_type = str(format_payload.get("@type") or "")
+    if format_type == "thumbnailFormatJpeg":
+        return "image/jpeg"
+    if format_type == "thumbnailFormatPng":
+        return "image/png"
+    if format_type == "thumbnailFormatWebp":
+        return "image/webp"
+    if format_type == "thumbnailFormatGif":
+        return "image/gif"
+    if format_type == "thumbnailFormatTgs":
+        return "application/x-tgsticker"
+    if format_type == "thumbnailFormatMpeg4":
+        return "video/mp4"
+    return default
+
+
+def _thumbnail_payload(
+    td_file: dict[str, Any] | None,
+    *,
+    message: dict[str, Any],
+    width: int,
+    height: int,
+    mime_type: str,
+) -> dict[str, Any] | None:
+    if td_file is None:
+        return None
+
+    file_id = _int_or_default(td_file.get("id"), 0)
+    if file_id <= 0:
+        return None
+
+    local = td_file.get("local") if isinstance(td_file.get("local"), dict) else {}
+    remote = td_file.get("remote") if isinstance(td_file.get("remote"), dict) else {}
+
+    unique_id = str(remote.get("unique_id") or "").strip()
+    if not unique_id:
+        unique_id = (
+            f"thumb-{_int_or_default(message.get('chat_id'), 0)}-"
+            f"{_int_or_default(message.get('id'), 0)}-{file_id}"
+        )
+
+    is_completed = bool(local.get("is_downloading_completed"))
+    is_downloading = bool(local.get("is_downloading_active"))
+    local_path = str(local.get("path") or "").strip() if is_completed else ""
+
+    return {
+        "id": file_id,
+        "uniqueId": unique_id,
+        "mimeType": mime_type,
+        "size": max(
+            _int_or_default(td_file.get("size"), 0),
+            _int_or_default(td_file.get("expected_size"), 0),
+        ),
+        "downloadedSize": _int_or_default(local.get("downloaded_size"), 0),
+        "downloadStatus": (
+            "completed"
+            if is_completed
+            else ("downloading" if is_downloading else "idle")
+        ),
+        "localPath": local_path,
+        "extra": {
+            "width": width,
+            "height": height,
+        },
+    }
+
+
 def extract_td_message_file(message: dict[str, Any]) -> dict[str, Any] | None:
     content = message.get("content")
     if not isinstance(content, dict):
@@ -45,6 +121,39 @@ def extract_td_message_file(message: dict[str, Any]) -> dict[str, Any] | None:
         td_file = _safe_td_file(best.get("photo") if isinstance(best, dict) else None)
         if td_file is None:
             return None
+        completed_sizes = [
+            item
+            for item in candidates
+            if isinstance(item, dict)
+            and isinstance(item.get("photo"), dict)
+            and isinstance(item["photo"].get("local"), dict)
+            and bool(item["photo"]["local"].get("is_downloading_completed"))
+        ]
+        thumbnail_source = max(
+            completed_sizes,
+            key=lambda item: _int_or_default(item.get("width"), 0)
+            * _int_or_default(item.get("height"), 0),
+            default=best,
+        )
+        thumbnail_file = _thumbnail_payload(
+            _safe_td_file(
+                thumbnail_source.get("photo")
+                if isinstance(thumbnail_source, dict)
+                else None
+            ),
+            message=message,
+            width=_int_or_default(
+                thumbnail_source.get("width")
+                if isinstance(thumbnail_source, dict)
+                else 0
+            ),
+            height=_int_or_default(
+                thumbnail_source.get("height")
+                if isinstance(thumbnail_source, dict)
+                else 0
+            ),
+            mime_type="image/jpeg",
+        )
         minithumbnail = photo.get("minithumbnail")
         thumbnail = (
             str(minithumbnail.get("data") or "")
@@ -58,6 +167,7 @@ def extract_td_message_file(message: dict[str, Any]) -> dict[str, Any] | None:
             "fileName": f"photo_{_int_or_default(message.get('id'), 0)}.jpg",
             "mimeType": "image/jpeg",
             "thumbnail": thumbnail,
+            "thumbnailFile": thumbnail_file,
             "extra": {
                 "width": _int_or_default(
                     best.get("width") if isinstance(best, dict) else 0
@@ -77,6 +187,28 @@ def extract_td_message_file(message: dict[str, Any]) -> dict[str, Any] | None:
         td_file = _safe_td_file(video.get("video"))
         if td_file is None:
             return None
+        thumbnail_payload = (
+            video.get("thumbnail") if isinstance(video.get("thumbnail"), dict) else None
+        )
+        thumbnail_file = _thumbnail_payload(
+            _safe_td_file(
+                thumbnail_payload.get("file")
+                if isinstance(thumbnail_payload, dict)
+                else None
+            ),
+            message=message,
+            width=_int_or_default(
+                thumbnail_payload.get("width")
+                if isinstance(thumbnail_payload, dict)
+                else 0
+            ),
+            height=_int_or_default(
+                thumbnail_payload.get("height")
+                if isinstance(thumbnail_payload, dict)
+                else 0
+            ),
+            mime_type=_thumbnail_mime_type(thumbnail_payload),
+        )
         minithumbnail = video.get("minithumbnail")
         thumbnail = (
             str(minithumbnail.get("data") or "")
@@ -93,6 +225,7 @@ def extract_td_message_file(message: dict[str, Any]) -> dict[str, Any] | None:
             ),
             "mimeType": str(video.get("mime_type") or "video/mp4"),
             "thumbnail": thumbnail,
+            "thumbnailFile": thumbnail_file,
             "extra": {
                 "width": _int_or_default(video.get("width"), 0),
                 "height": _int_or_default(video.get("height"), 0),
@@ -109,6 +242,30 @@ def extract_td_message_file(message: dict[str, Any]) -> dict[str, Any] | None:
         td_file = _safe_td_file(animation.get("animation"))
         if td_file is None:
             return None
+        thumbnail_payload = (
+            animation.get("thumbnail")
+            if isinstance(animation.get("thumbnail"), dict)
+            else None
+        )
+        thumbnail_file = _thumbnail_payload(
+            _safe_td_file(
+                thumbnail_payload.get("file")
+                if isinstance(thumbnail_payload, dict)
+                else None
+            ),
+            message=message,
+            width=_int_or_default(
+                thumbnail_payload.get("width")
+                if isinstance(thumbnail_payload, dict)
+                else 0
+            ),
+            height=_int_or_default(
+                thumbnail_payload.get("height")
+                if isinstance(thumbnail_payload, dict)
+                else 0
+            ),
+            mime_type=_thumbnail_mime_type(thumbnail_payload),
+        )
         minithumbnail = animation.get("minithumbnail")
         thumbnail = (
             str(minithumbnail.get("data") or "")
@@ -125,6 +282,7 @@ def extract_td_message_file(message: dict[str, Any]) -> dict[str, Any] | None:
             ),
             "mimeType": str(animation.get("mime_type") or "video/mp4"),
             "thumbnail": thumbnail,
+            "thumbnailFile": thumbnail_file,
             "extra": {
                 "width": _int_or_default(animation.get("width"), 0),
                 "height": _int_or_default(animation.get("height"), 0),
@@ -162,6 +320,30 @@ def extract_td_message_file(message: dict[str, Any]) -> dict[str, Any] | None:
         td_file = _safe_td_file(document.get("document"))
         if td_file is None:
             return None
+        thumbnail_payload = (
+            document.get("thumbnail")
+            if isinstance(document.get("thumbnail"), dict)
+            else None
+        )
+        thumbnail_file = _thumbnail_payload(
+            _safe_td_file(
+                thumbnail_payload.get("file")
+                if isinstance(thumbnail_payload, dict)
+                else None
+            ),
+            message=message,
+            width=_int_or_default(
+                thumbnail_payload.get("width")
+                if isinstance(thumbnail_payload, dict)
+                else 0
+            ),
+            height=_int_or_default(
+                thumbnail_payload.get("height")
+                if isinstance(thumbnail_payload, dict)
+                else 0
+            ),
+            mime_type=_thumbnail_mime_type(thumbnail_payload),
+        )
         minithumbnail = document.get("minithumbnail")
         thumbnail = (
             str(minithumbnail.get("data") or "")
@@ -178,6 +360,7 @@ def extract_td_message_file(message: dict[str, Any]) -> dict[str, Any] | None:
             ),
             "mimeType": str(document.get("mime_type") or "application/octet-stream"),
             "thumbnail": thumbnail,
+            "thumbnailFile": thumbnail_file,
             "extra": None,
             "hasSensitiveContent": False,
         }
@@ -242,7 +425,7 @@ def td_message_to_file(
         "size": _int_or_default(td_file.get("size"), 0),
         "downloadedSize": _int_or_default(local.get("downloaded_size"), 0),
         "thumbnail": extracted["thumbnail"],
-        "thumbnailFile": None,
+        "thumbnailFile": extracted.get("thumbnailFile"),
         "downloadStatus": download_status,
         "date": date_seconds,
         "formatDate": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(date_seconds))

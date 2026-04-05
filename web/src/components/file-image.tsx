@@ -160,12 +160,11 @@ export default function FilePreview({
   // 含义已下载的缩略图
   if (
     file.thumbnailFile?.mimeType.startsWith("image/") &&
-    file.thumbnailFile?.extra?.width &&
-    file.thumbnailFile.extra?.height
+    file.thumbnailFile?.uniqueId
   ) {
     return renderImage(
-      file.thumbnailFile.extra.width,
-      file.thumbnailFile.extra.height,
+      file.thumbnailFile.extra?.width || 256,
+      file.thumbnailFile.extra?.height || 256,
       file.thumbnailFile.uniqueId,
     );
   }

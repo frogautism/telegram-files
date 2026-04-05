@@ -116,22 +116,24 @@ export function FileTable({
     paddingStart: 1,
     paddingEnd: 1,
   });
+  const virtualItems = rowVirtual.getVirtualItems();
+  const lastVirtualIndex = virtualItems[virtualItems.length - 1]?.index;
 
   useEffect(() => {
     rowVirtual.measure();
   }, [rowHeight, rowVirtual]);
 
   useEffect(() => {
-    const [lastItem] = [...rowVirtual.getVirtualItems()].reverse();
-    if (!lastItem) {
+    if (lastVirtualIndex === undefined) {
       return;
     }
 
-    if (lastItem.index >= files.length - 1) {
-      void handleLoadMore();
+    if (lastVirtualIndex >= files.length - 1) {
+      queueMicrotask(() => {
+        void handleLoadMore();
+      });
     }
-    //eslint-disable-next-line
-  }, [files.length, handleLoadMore, rowVirtual.getVirtualItems()]);
+  }, [files.length, handleLoadMore, lastVirtualIndex]);
 
   useEffect(() => {
     if (files.length === 0 || !currentViewFile) {
@@ -289,7 +291,7 @@ export function FileTable({
               style={{ height: `${rowVirtual.getTotalSize()}px` }}
             >
               {files.length !== 0 &&
-                rowVirtual.getVirtualItems().map((virtualRow) => {
+                virtualItems.map((virtualRow) => {
                   const file = files[virtualRow.index]!;
                   return (
                     <FileRow

@@ -751,6 +751,136 @@ def _db_find_file_by_unique(
     ).fetchone()
 
 
+def _db_upsert_tdlib_thumbnail_record(
+    db: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    chat_id: int,
+    message_id: int,
+    date: int,
+    thumbnail_payload: dict[str, Any],
+) -> str:
+    unique_id = str(thumbnail_payload.get("uniqueId") or "").strip()
+    if not unique_id:
+        return ""
+
+    file_id = _int_or_default(thumbnail_payload.get("id"), 0)
+    mime_type = str(thumbnail_payload.get("mimeType") or "image/jpeg")
+    size = _int_or_default(thumbnail_payload.get("size"), 0)
+    downloaded_size = _int_or_default(thumbnail_payload.get("downloadedSize"), 0)
+    local_path = str(thumbnail_payload.get("localPath") or "").strip()
+    download_status = str(thumbnail_payload.get("downloadStatus") or "idle")
+    if local_path:
+        download_status = "completed"
+
+    completion_date = int(time.time() * 1000) if download_status == "completed" else 0
+    completion_value: int | None = completion_date if completion_date > 0 else None
+
+    extra_payload = thumbnail_payload.get("extra")
+    extra_json = (
+        json.dumps(extra_payload, separators=(",", ":"), ensure_ascii=False)
+        if extra_payload is not None
+        else None
+    )
+
+    existing = _db_find_file_by_unique(
+        db,
+        telegram_id=telegram_id,
+        unique_id=unique_id,
+    )
+    if existing is not None:
+        existing_status = str(existing["download_status"] or "idle")
+        if existing_status == "completed" and download_status != "completed":
+            download_status = existing_status
+            local_path = str(existing["local_path"] or local_path)
+            completion_value = _int_or_default(existing["completion_date"], 0) or None
+        if not local_path and str(existing["local_path"] or ""):
+            local_path = str(existing["local_path"] or "")
+            download_status = "completed"
+            completion_value = _int_or_default(existing["completion_date"], 0) or None
+
+    if existing is None:
+        db.execute(
+            """
+            INSERT INTO file_record(
+                id, unique_id, telegram_id, chat_id, message_id, media_album_id,
+                date, has_sensitive_content, size, downloaded_size, type, mime_type,
+                file_name, thumbnail, thumbnail_unique_id, caption, extra, local_path,
+                download_status, transfer_status, start_date, completion_date, tags,
+                thread_chat_id, message_thread_id, reaction_count
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                file_id,
+                unique_id,
+                telegram_id,
+                chat_id,
+                message_id,
+                0,
+                date,
+                0,
+                size,
+                downloaded_size,
+                "thumbnail",
+                mime_type,
+                f"thumbnail_{message_id}_{file_id}",
+                "",
+                None,
+                "",
+                extra_json,
+                local_path,
+                download_status,
+                "idle",
+                0,
+                completion_value,
+                None,
+                0,
+                0,
+                0,
+            ),
+        )
+    else:
+        db.execute(
+            """
+            UPDATE file_record
+            SET id = ?,
+                chat_id = ?,
+                message_id = ?,
+                date = ?,
+                size = ?,
+                downloaded_size = ?,
+                type = 'thumbnail',
+                mime_type = ?,
+                file_name = ?,
+                extra = ?,
+                local_path = ?,
+                download_status = ?,
+                transfer_status = 'idle',
+                completion_date = ?
+            WHERE telegram_id = ? AND unique_id = ?
+            """,
+            (
+                file_id,
+                chat_id,
+                message_id,
+                date,
+                size,
+                downloaded_size,
+                mime_type,
+                f"thumbnail_{message_id}_{file_id}",
+                extra_json,
+                local_path,
+                download_status,
+                completion_value,
+                telegram_id,
+                unique_id,
+            ),
+        )
+
+    return unique_id
+
+
 def _db_upsert_tdlib_file_record(
     db: sqlite3.Connection,
     *,
@@ -778,6 +908,16 @@ def _db_upsert_tdlib_file_record(
     completion_value: int | None = completion_date if completion_date > 0 else None
     download_status = str(file_payload.get("downloadStatus") or "idle")
     transfer_status = str(file_payload.get("transferStatus") or "idle")
+    thumbnail_payload = (
+        file_payload.get("thumbnailFile")
+        if isinstance(file_payload.get("thumbnailFile"), dict)
+        else None
+    )
+    thumbnail_unique_id = (
+        str(thumbnail_payload.get("uniqueId") or "").strip()
+        if thumbnail_payload is not None
+        else ""
+    )
 
     payload_values = {
         "id": _int_or_default(file_payload.get("id"), 0),
@@ -794,7 +934,7 @@ def _db_upsert_tdlib_file_record(
         "mime_type": str(file_payload.get("mimeType") or "application/octet-stream"),
         "file_name": str(file_payload.get("fileName") or unique_id),
         "thumbnail": str(file_payload.get("thumbnail") or ""),
-        "thumbnail_unique_id": None,
+        "thumbnail_unique_id": thumbnail_unique_id or None,
         "caption": str(file_payload.get("caption") or ""),
         "extra": extra_json,
         "local_path": str(file_payload.get("localPath") or ""),
@@ -839,6 +979,11 @@ def _db_upsert_tdlib_file_record(
             payload_values["completion_date"] = _int_or_default(
                 existing["completion_date"], 0
             )
+        if (
+            not payload_values["thumbnail_unique_id"]
+            and str(existing["thumbnail_unique_id"] or "").strip()
+        ):
+            payload_values["thumbnail_unique_id"] = str(existing["thumbnail_unique_id"])
         if payload_values["thread_chat_id"] == 0:
             payload_values["thread_chat_id"] = _int_or_default(
                 existing["thread_chat_id"],
@@ -907,6 +1052,7 @@ def _db_upsert_tdlib_file_record(
                 mime_type = ?,
                 file_name = ?,
                 thumbnail = ?,
+                thumbnail_unique_id = ?,
                 caption = ?,
                 extra = ?,
                 local_path = ?,
@@ -932,6 +1078,7 @@ def _db_upsert_tdlib_file_record(
                 payload_values["mime_type"],
                 payload_values["file_name"],
                 payload_values["thumbnail"],
+                payload_values["thumbnail_unique_id"],
                 payload_values["caption"],
                 payload_values["extra"],
                 payload_values["local_path"],
@@ -946,6 +1093,28 @@ def _db_upsert_tdlib_file_record(
                 unique_id,
             ),
         )
+
+    if thumbnail_payload is not None:
+        linked_unique_id = _db_upsert_tdlib_thumbnail_record(
+            db,
+            telegram_id=telegram_id,
+            chat_id=payload_values["chat_id"],
+            message_id=payload_values["message_id"],
+            date=payload_values["date"],
+            thumbnail_payload=thumbnail_payload,
+        )
+        if (
+            linked_unique_id
+            and payload_values["thumbnail_unique_id"] != linked_unique_id
+        ):
+            db.execute(
+                """
+                UPDATE file_record
+                SET thumbnail_unique_id = ?
+                WHERE telegram_id = ? AND unique_id = ?
+                """,
+                (linked_unique_id, telegram_id, unique_id),
+            )
 
     db.commit()
 
@@ -2918,6 +3087,104 @@ def _start_tdlib_download_for_message(
     return file_payload
 
 
+def _enrich_tdlib_thumbnails_for_files(
+    db: sqlite3.Connection,
+    td_manager: TdlibAuthManager,
+    *,
+    telegram_id: int,
+    root_path: str,
+    files: list[dict[str, Any]],
+) -> bool:
+    if not files:
+        return False
+    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
+        return False
+
+    account_key = str(telegram_id)
+    changed = False
+
+    for file_item in files:
+        if not isinstance(file_item, dict):
+            continue
+        if isinstance(file_item.get("thumbnailFile"), dict):
+            continue
+
+        chat_id = _int_or_default(file_item.get("chatId"), 0)
+        message_id = _int_or_default(file_item.get("messageId"), 0)
+        if chat_id == 0 or message_id == 0:
+            continue
+
+        message_result = td_manager.request(
+            account_key,
+            {
+                "@type": "getMessage",
+                "chat_id": chat_id,
+                "message_id": message_id,
+            },
+            timeout_seconds=12.0,
+        )
+        if str(message_result.get("@type") or "") == "error":
+            continue
+
+        mapped = _td_message_to_file(telegram_id, message_result)
+        if mapped is None:
+            continue
+
+        thumbnail_payload = (
+            mapped.get("thumbnailFile")
+            if isinstance(mapped.get("thumbnailFile"), dict)
+            else None
+        )
+        if thumbnail_payload is None:
+            continue
+
+        thumbnail_file_id = _int_or_default(thumbnail_payload.get("id"), 0)
+        thumbnail_path = str(thumbnail_payload.get("localPath") or "").strip()
+        if thumbnail_file_id > 0 and not thumbnail_path:
+            download_result = td_manager.request(
+                account_key,
+                {
+                    "@type": "downloadFile",
+                    "file_id": thumbnail_file_id,
+                    "priority": 1,
+                    "offset": 0,
+                    "limit": 0,
+                    "synchronous": True,
+                },
+                timeout_seconds=15.0,
+            )
+            if str(download_result.get("@type") or "") == "file":
+                local = (
+                    download_result.get("local")
+                    if isinstance(download_result.get("local"), dict)
+                    else {}
+                )
+                if bool(local.get("is_downloading_completed")):
+                    resolved_path = str(local.get("path") or "").strip()
+                    if resolved_path:
+                        thumbnail_payload["localPath"] = resolved_path
+                        thumbnail_payload["downloadStatus"] = "completed"
+                        thumbnail_payload["downloadedSize"] = _int_or_default(
+                            local.get("downloaded_size"),
+                            _int_or_default(thumbnail_payload.get("downloadedSize"), 0),
+                        )
+                        thumbnail_payload["size"] = max(
+                            _int_or_default(download_result.get("size"), 0),
+                            _int_or_default(download_result.get("expected_size"), 0),
+                            _int_or_default(thumbnail_payload.get("size"), 0),
+                        )
+
+        current_unique_id = str(file_item.get("uniqueId") or "").strip()
+        mapped_unique_id = str(mapped.get("uniqueId") or "").strip()
+        if current_unique_id and current_unique_id != mapped_unique_id:
+            mapped["uniqueId"] = current_unique_id
+
+        _db_upsert_tdlib_file_record(db, file_payload=mapped)
+        changed = True
+
+    return changed
+
+
 def _int_or_default(value: Any, default: int = 0) -> int:
     try:
         if value is None or value == "":
@@ -3918,7 +4185,53 @@ async def telegram_files(
 
     db_result = list_files(db, telegram_id=telegramId, chat_id=chatId, filters=filters)
     offline_requested = _bool_or_none(filters.get("offline")) is True
-    if offline_requested or _int_or_default(db_result.get("size"), 0) > 0:
+    if offline_requested:
+        return db_result
+
+    if _int_or_default(db_result.get("size"), 0) > 0:
+        can_try_enrichment = _int_or_default(filters.get("fromMessageId"), 0) == 0
+        if can_try_enrichment:
+            td_manager = _tdlib_manager_from_app(request.app)
+            if td_manager is not None:
+                config: AppConfig = request.app.state.config
+                account = get_telegram_account(
+                    db,
+                    telegram_id=telegramId,
+                    app_root=str(config.app_root),
+                )
+                if account is not None:
+                    try:
+                        changed = await asyncio.to_thread(
+                            _enrich_tdlib_thumbnails_for_files,
+                            db,
+                            td_manager,
+                            telegram_id=telegramId,
+                            root_path=str(account.get("rootPath") or ""),
+                            files=[
+                                item
+                                for item in (
+                                    db_result.get("files")
+                                    if isinstance(db_result.get("files"), list)
+                                    else []
+                                )
+                                if isinstance(item, dict)
+                            ],
+                        )
+                        if changed:
+                            return list_files(
+                                db,
+                                telegram_id=telegramId,
+                                chat_id=chatId,
+                                filters=filters,
+                            )
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to enrich thumbnails for telegram=%s chat=%s: %s",
+                            telegramId,
+                            chatId,
+                            exc,
+                        )
+
         return db_result
 
     td_manager = _tdlib_manager_from_app(request.app)

@@ -159,9 +159,9 @@ def _serialize_file_row(
     date_seconds = _safe_int(row["date"], 0)
     completion_date = row["completion_date"]
     thumbnail_file: dict[str, Any] | None = None
-    if (
-        thumbnail_row is not None
-        and str(thumbnail_row["download_status"] or "") == "completed"
+    if thumbnail_row is not None and (
+        str(thumbnail_row["download_status"] or "") == "completed"
+        or str(thumbnail_row["local_path"] or "").strip() != ""
     ):
         thumbnail_file = {
             "uniqueId": str(thumbnail_row["unique_id"] or ""),
@@ -368,10 +368,16 @@ def list_files(
     thumbnail_map: dict[str, sqlite3.Row] = {}
     if thumbnail_ids:
         placeholders = ", ".join(["?"] * len(thumbnail_ids))
-        thumbnail_rows = conn.execute(
-            f"SELECT * FROM file_record WHERE unique_id IN ({placeholders})",
-            thumbnail_ids,
-        ).fetchall()
+        if telegram_id is not None and telegram_id != -1:
+            thumbnail_rows = conn.execute(
+                f"SELECT * FROM file_record WHERE telegram_id = ? AND unique_id IN ({placeholders})",
+                [telegram_id, *thumbnail_ids],
+            ).fetchall()
+        else:
+            thumbnail_rows = conn.execute(
+                f"SELECT * FROM file_record WHERE unique_id IN ({placeholders})",
+                thumbnail_ids,
+            ).fetchall()
         thumbnail_map = {str(t_row["unique_id"]): t_row for t_row in thumbnail_rows}
 
     files = [
