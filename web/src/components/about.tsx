@@ -46,10 +46,10 @@ export default function About() {
 
   return (
     <div className="flex justify-center md:h-full md:items-center">
-      <Card className="w-full bg-[radial-gradient(ellipse_at_bottom_left,_var(--tw-gradient-stops))] from-[#7900ff] via-[#548cff] to-[#93ffd8] md:w-1/2">
+      <Card className="w-full max-w-2xl overflow-hidden border-border/80 bg-card">
         <CardHeader>
-          <CardTitle className="text-white">About This Project</CardTitle>
-          <CardDescription className="text-white">
+          <CardTitle>About This Project</CardTitle>
+          <CardDescription>
             A self-hosted Telegram file downloader for continuous, stable, and
             unattended downloads.
           </CardDescription>
@@ -61,50 +61,50 @@ export default function About() {
             loop={true}
           />
           <div className="space-y-4">
-            <div className="flex flex-col items-center justify-center">
-              <p className="text-sm font-medium text-white">Author</p>
+            <div className="flex flex-col items-center justify-center rounded-[20px] bg-muted p-4">
+              <p className="text-sm font-medium text-muted-foreground">Author</p>
               <p>{projectInfo.author}</p>
             </div>
 
-            <div className="flex flex-col items-center justify-center">
-              <p className="mb-1 text-sm font-medium text-white">
+            <div className="flex flex-col items-center justify-center rounded-[20px] bg-muted p-4">
+              <p className="mb-1 text-sm font-medium text-muted-foreground">
                 Current Version
               </p>
               {apiError ? (
                 <p className="text-red-500">Failed to load current version</p>
               ) : !apiData ? (
                 <div className="flex items-center space-x-2">
-                  <RefreshCw className="animate-spin text-white" size={16} />
+                  <RefreshCw className="animate-spin text-muted-foreground" size={16} />
                   <span>Loading...</span>
                 </div>
               ) : (
-                <p className="rounded bg-gray-100 px-3 dark:bg-gray-800">
+                <p className="rounded-full bg-card px-3 py-1">
                   {currentVersion}
                 </p>
               )}
             </div>
 
-            <div className="flex flex-col items-center justify-center">
-              <p className="mb-1 text-sm font-medium text-white">
+            <div className="flex flex-col items-center justify-center rounded-[20px] bg-muted p-4">
+              <p className="mb-1 text-sm font-medium text-muted-foreground">
                 Latest Version
               </p>
               {githubError ? (
                 <p className="text-red-500">Failed to load release data</p>
               ) : !githubData ? (
                 <div className="flex items-center space-x-2">
-                  <RefreshCw className="animate-spin text-white" size={16} />
+                  <RefreshCw className="animate-spin text-muted-foreground" size={16} />
                   <span>Loading...</span>
                 </div>
               ) : (
-                <p className="rounded bg-gray-100 px-3 dark:bg-gray-800">
+                <p className="rounded-full bg-card px-3 py-1">
                   {githubData.tag_name}
                 </p>
               )}
             </div>
 
             {isNewVersionAvailable && (
-              <div className="border-l-4 border-gray-700 bg-white px-4 py-2">
-                <p className="text-gray-800">
+              <div className="rounded-[20px] border border-border/80 bg-muted px-4 py-3">
+                <p className="text-sm text-foreground">
                   A new version ({githubData?.tag_name}) is available! Update
                   now.
                 </p>

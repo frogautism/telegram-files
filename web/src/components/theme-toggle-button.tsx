@@ -12,7 +12,7 @@ export default function ThemeToggleButton() {
       <Toggle
         variant="default"
         size="sm"
-        className="group size-9"
+        className="group size-10 rounded-full border border-input bg-card"
         pressed={theme === "dark"}
         onPressedChange={() =>
           setTheme((prev) => (prev === "dark" ? "light" : "dark"))

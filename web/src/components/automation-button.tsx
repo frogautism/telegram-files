@@ -1,6 +1,6 @@
 "use client";
 import React from "react";
-import { ArrowRight } from "lucide-react";
+import { Bot } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -31,31 +31,28 @@ const AutomationButton = React.forwardRef<
           <button
             ref={ref}
             className={cn(
-              "group relative w-32 cursor-pointer overflow-hidden rounded border bg-background p-1 text-center font-semibold",
-              isMobile && "h-10 w-full",
+              "inline-flex h-10 w-36 items-center justify-center gap-2 rounded-[16px] border border-input bg-card px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent",
+              isMobile && "w-full",
               className,
             )}
             {...props}
           >
-            <span className="inline-block translate-x-1 transition-all duration-300 group-hover:translate-x-12 group-hover:opacity-0">
-              {autoEnabled ? "Running" : "Stopped"}
-            </span>
-            <div className="absolute top-0 z-10 flex h-full w-full translate-x-12 items-center justify-center gap-2 text-primary-foreground opacity-0 transition-all duration-300 group-hover:-translate-x-1 group-hover:opacity-100">
-              <span>{autoEnabled ? "Disable" : "Enable"}</span>
-              <ArrowRight />
-            </div>
+            <span
+              className={cn(
+                "h-2.5 w-2.5 rounded-full",
+                autoEnabled ? "bg-[#103c25]" : "bg-[#91918c]",
+              )}
+            />
+            <Bot className="h-4 w-4" />
+            <span>{autoEnabled ? "Automation on" : "Automation off"}</span>
             <div
               className={cn(
-                "absolute left-[10%] top-[40%] h-2 w-2 scale-[1] rounded-lg bg-primary transition-all duration-300 group-hover:left-[0%] group-hover:top-[0%] group-hover:h-full group-hover:w-full group-hover:scale-[1.8] group-hover:animate-none group-hover:bg-primary",
-                autoEnabled
-                  ? auto?.preload.enabled &&
-                    auto.download.enabled &&
-                    auto.transfer.enabled
-                    ? "animate-breathing bg-green-500"
-                    : "animate-breathing bg-blue-500"
-                  : "bg-red-500",
+                "ml-1 rounded-full px-2 py-1 text-[11px]",
+                autoEnabled ? "bg-[#dce7dd] text-[#103c25]" : "bg-muted text-muted-foreground",
               )}
-            ></div>
+            >
+              {autoEnabled ? "Live" : "Idle"}
+            </div>
           </button>
         </TooltipTrigger>
         <TooltipContent>

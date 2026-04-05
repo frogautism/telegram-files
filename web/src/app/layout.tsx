@@ -1,6 +1,5 @@
 import "@/styles/globals.css";
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import React from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { SWRProvider } from "@/components/swr-provider";
@@ -11,11 +10,9 @@ import { TelegramAccountProvider } from "@/hooks/use-telegram-account";
 import { ThemeProvider } from "@/components/theme-provider";
 import { LocalStorageProvider } from "@/hooks/use-local-storage";
 
-const inter = Inter({ subsets: ["latin"] });
-
 export const metadata: Metadata = {
-  title: "Telegram Files",
-  description: "Manage your files on Telegram",
+  title: "TeleFiles",
+  description: "Pinterest-inspired Telegram downloader and file board",
 };
 
 export default async function RootLayout({
@@ -48,7 +45,7 @@ export default async function RootLayout({
           />
         )}
       </head>
-      <body className={inter.className}>
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         <LocalStorageProvider>
           <ThemeProvider
             attribute="class"

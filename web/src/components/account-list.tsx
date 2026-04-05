@@ -15,45 +15,59 @@ interface AccountListProps {
 
 export function AccountList({ accounts, onSelectAccount }: AccountListProps) {
   return (
-    <div className="mx-auto grid max-w-5xl grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
       {accounts.map((account) => (
         <Card
           key={account.id}
-          className="group relative cursor-pointer transition-shadow hover:shadow-lg"
+          className="group relative cursor-pointer overflow-hidden transition-colors hover:bg-muted"
           onClick={(_e) => {
             onSelectAccount(account.id);
           }}
         >
           <AccountDeleteDialog
             telegramId={account.id}
-            className="absolute bottom-1 right-1 hidden group-hover:inline-flex"
+            className="absolute right-4 top-4 z-10 hidden group-hover:inline-flex"
           />
           <CardContent className="p-6">
-            <div className="flex items-start gap-4">
-              <Avatar className="h-12 w-12">
+            <div className="mb-5 flex h-36 items-start justify-between rounded-[24px] bg-muted p-5">
+              <Avatar className="h-16 w-16 border-4 border-card">
                 <AvatarImage src={`data:image/jpeg;base64,${account.avatar}`} />
                 <AvatarFallback>{account.name[0]}</AvatarFallback>
               </Avatar>
-              <div className="flex-1">
-                <div className="mb-2 flex items-center justify-between">
-                  <h3 className="font-semibold">{account.name}</h3>
-                  <Badge
-                    variant={
-                      account.status === "active" ? "default" : "secondary"
-                    }
-                  >
-                    <Circle
-                      className={`mr-1 h-2 w-2 ${account.status === "active" ? "text-green-500" : "text-gray-500"}`}
-                    />
-                    {account.status}
-                  </Badge>
-                </div>
-                {account.status === "active" && (
-                  <div className="mb-4 flex items-center text-sm text-muted-foreground">
-                    <PhoneCall className="mr-1 h-3 w-3" />
-                    <Spoiler>{account.phoneNumber}</Spoiler>
-                  </div>
-                )}
+              <Badge
+                variant={account.status === "active" ? "default" : "secondary"}
+                className="gap-2"
+              >
+                <Circle
+                  className={`h-2.5 w-2.5 ${account.status === "active" ? "text-[#103c25]" : "text-muted-foreground"}`}
+                />
+                {account.status}
+              </Badge>
+            </div>
+
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <h3 className="text-xl font-semibold">{account.name}</h3>
+                <p className="text-sm text-muted-foreground">
+                  {account.status === "active" ? (
+                    <span className="inline-flex items-center gap-1">
+                      <PhoneCall className="h-3.5 w-3.5" />
+                      <Spoiler>{account.phoneNumber}</Spoiler>
+                    </span>
+                  ) : (
+                    "Authorization required"
+                  )}
+                </p>
+              </div>
+
+              <p className="line-clamp-2 text-sm text-muted-foreground">
+                {account.rootPath}
+              </p>
+
+              <div className="flex items-center justify-between gap-3 pt-2">
+                <Button variant="secondary" size="sm">
+                  Open board
+                </Button>
                 {account.status === "inactive" && (
                   <AccountDialog>
                     <Button variant="outline" size="sm">

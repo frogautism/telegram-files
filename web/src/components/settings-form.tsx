@@ -53,15 +53,14 @@ export default function SettingsForm() {
       onSubmit={handleSave}
       className="flex h-full flex-col overflow-hidden"
     >
-      <div className="no-scrollbar flex flex-col space-y-4 overflow-y-scroll">
-        <p className="rounded-md bg-gray-50 p-2 text-sm text-muted-foreground dark:bg-gray-700">
+      <div className="no-scrollbar flex flex-col space-y-4 overflow-y-scroll pr-1">
+        <p className="rounded-[22px] bg-muted px-4 py-3 text-sm text-muted-foreground">
           <Bell className="mr-2 inline-block h-4 w-4" />
           These settings will be applied to all accounts.
         </p>
-        <div className="w-full rounded-md border p-4 shadow">
-          <p className="mb-1 text-xs text-muted-foreground">Your root path</p>
+        <SettingsSection title="Root path">
           <div className="flex items-center justify-between space-x-1">
-            <p className="rounded-md bg-gray-50 p-2 text-xs text-muted-foreground dark:bg-gray-700">
+            <p className="rounded-[16px] bg-muted p-3 text-xs text-muted-foreground">
               {account?.rootPath}
             </p>
             <Button
@@ -75,37 +74,37 @@ export default function SettingsForm() {
               <Copy className="h-4 w-4" />
             </Button>
           </div>
-        </div>
-        <div className="flex w-full cursor-pointer flex-col space-y-4 rounded-md border p-4 shadow">
+        </SettingsSection>
+        <SettingsSection title="Speed units">
           <div className="flex items-center justify-between">
-            <Label>Speed Units</Label>
+            <Label>Display</Label>
             <RadioGroup
               value={settings?.speedUnits || "bits"}
               onValueChange={(v) => void setSetting("speedUnits", v)}
-              className="group inline-flex h-9 items-center justify-center rounded-lg bg-muted p-1 text-muted-foreground"
-              data-state={settings?.speedUnits || "bits"}
-            >
-              <label className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 group-data-[state=bits]:bg-background group-data-[state=bits]:text-foreground group-data-[state=bits]:shadow">
-                bits
-                <RadioGroupItem
-                  id="enspeedUnits-bits"
+               className="group inline-flex h-10 items-center justify-center rounded-[18px] bg-secondary p-1 text-muted-foreground"
+               data-state={settings?.speedUnits || "bits"}
+             >
+               <label className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-[14px] px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 group-data-[state=bits]:bg-card group-data-[state=bits]:text-foreground">
+                 bits
+                 <RadioGroupItem
+                   id="enspeedUnits-bits"
                   value="bits"
                   className="sr-only"
                 />
               </label>
-              <label className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 group-data-[state=bytes]:bg-background group-data-[state=bytes]:text-foreground group-data-[state=bytes]:shadow">
-                bytes
-                <RadioGroupItem
-                  id="speedUnits-bytes"
+               <label className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-[14px] px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 group-data-[state=bytes]:bg-card group-data-[state=bytes]:text-foreground">
+                 bytes
+                 <RadioGroupItem
+                   id="speedUnits-bytes"
                   value="bytes"
                   className="sr-only"
                 />
               </label>
             </RadioGroup>
           </div>
-        </div>
+        </SettingsSection>
         <div
-          className="flex w-full cursor-pointer flex-col space-y-4 rounded-md border p-4 shadow"
+          className="flex w-full cursor-pointer flex-col space-y-4 rounded-[24px] border border-border/80 bg-card p-5"
           onClick={(event) => handleSwitchChange("uniqueOnly", event)}
         >
           <div className="flex items-center justify-between">
@@ -123,7 +122,7 @@ export default function SettingsForm() {
             form will be inaccurate.
           </p>
         </div>
-        <div className="flex w-full flex-col space-y-4 rounded-md border p-4 shadow">
+        <div className="flex w-full flex-col space-y-4 rounded-[24px] border border-border/80 bg-card p-5">
           <div
             className="flex cursor-pointer flex-col space-y-4"
             onClick={(event) => handleSwitchChange("alwaysHide", event)}
@@ -164,8 +163,8 @@ export default function SettingsForm() {
             </div>
           )}
         </div>
-        <div className="flex w-full flex-col space-y-4 rounded-md border p-4 shadow">
-          <Label>Auto Download Settings</Label>
+        <div className="flex w-full flex-col space-y-4 rounded-[24px] border border-border/80 bg-card p-5">
+          <Label className="text-base font-semibold text-foreground">Auto download</Label>
           <div className="flex flex-col space-y-4">
             <div className="flex items-center justify-between">
               <Label htmlFor="limit">Limit Per Account</Label>
@@ -244,8 +243,8 @@ export default function SettingsForm() {
             </p>
           </div>
         </div>
-        <div className="flex w-full flex-col space-y-4 rounded-md border p-4 shadow">
-          <Label>Tags Settings</Label>
+        <div className="flex w-full flex-col space-y-4 rounded-[24px] border border-border/80 bg-card p-5">
+          <Label className="text-base font-semibold text-foreground">Tags</Label>
           <div className="flex flex-col space-y-4">
             <TagsInput
               maxTags={20}
@@ -259,7 +258,7 @@ export default function SettingsForm() {
           </div>
         </div>
       </div>
-      <DialogFooter className="mt-2 flex-1 gap-2">
+      <DialogFooter className="mt-4 flex-1 gap-2 border-t border-border/80 bg-background pt-4">
         <DialogClose asChild>
           <Button className="w-full md:w-auto" variant="outline" type="button">
             Cancel
@@ -270,5 +269,20 @@ export default function SettingsForm() {
         </Button>
       </DialogFooter>
     </form>
+  );
+}
+
+function SettingsSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="w-full rounded-[24px] border border-border/80 bg-card p-5">
+      <p className="mb-3 text-base font-semibold text-foreground">{title}</p>
+      {children}
+    </div>
   );
 }

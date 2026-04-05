@@ -31,7 +31,7 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
   const [isTagsDrawerOpen, setIsTagsDrawerOpen] = useState(false);
   const [layout] = useLocalStorage<"detailed" | "gallery">(
     "telegramFileLayout",
-    "detailed",
+    "gallery",
   );
 
   const {
@@ -98,7 +98,7 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
   }, [files, currentViewFile, isDrawerOpen]);
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-6">
       {!link && (
         <DraggableElement>
           <FileFilters

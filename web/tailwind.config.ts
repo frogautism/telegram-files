@@ -68,7 +68,20 @@ export default {
         "accordion-up": "accordion-up 0.2s ease-out",
       },
       fontFamily: {
-        sans: ["var(--font-geist-sans)", ...fontFamily.sans],
+        sans: [
+          '"Pin Sans"',
+          "-apple-system",
+          "system-ui",
+          '"Segoe UI"',
+          "Roboto",
+          "Oxygen-Sans",
+          "Ubuntu",
+          "Cantarell",
+          '"Helvetica Neue"',
+          "Helvetica",
+          "Arial",
+          ...fontFamily.sans,
+        ],
       },
       borderRadius: {
         lg: "var(--radius)",

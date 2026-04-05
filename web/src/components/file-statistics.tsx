@@ -23,11 +23,10 @@ import { telegramApi, type TelegramApiArg } from "@/lib/api";
 import { formatDistanceToNow } from "date-fns";
 import { Button } from "@/components/ui/button";
 import useSWRMutation from "swr/mutation";
-import type { TelegramApiResult } from "@/lib/types"; // Define a fetcher function to handle the API request
+import type { TelegramApiResult } from "@/lib/types";
 import prettyBytes from "pretty-bytes";
 import { useSettings } from "@/hooks/use-settings";
 
-// Interface defining the structure of the data returned from the API
 interface StatisticsData {
   total: number;
   downloading: number;
@@ -52,14 +51,12 @@ interface StatisticsData {
   };
 }
 
-// Props interface for the component, expecting a telegramId as input
 interface FileStatisticsProps {
   telegramId: string;
 }
 
 const FileStatistics: React.FC<FileStatisticsProps> = ({ telegramId }) => {
   const { settings } = useSettings();
-  // Use SWR for data fetching and caching
   const { data, error, mutate } = useSWR<StatisticsData, Error>(
     `/telegram/${telegramId}/download-statistics`,
   );
@@ -75,243 +72,166 @@ const FileStatistics: React.FC<FileStatisticsProps> = ({ telegramId }) => {
     },
   });
 
-  // Render an error message if the API call fails
   if (error) {
     return (
-      <div className="flex items-center space-x-2 rounded-lg bg-white p-4 text-red-600 shadow-md dark:bg-red-50 dark:text-red-400">
-        <AlertTriangle className="h-5 w-5" />
-        <span>Failed to load data.</span>
+      <div className="rounded-[24px] border border-border/80 bg-card p-5 text-destructive">
+        <div className="flex items-center gap-3">
+          <AlertTriangle className="h-5 w-5" />
+          Failed to load statistics.
+        </div>
       </div>
     );
   }
 
-  // Render a loading indicator while the data is being fetched
   if (!data) {
     return (
-      <div className="flex items-center space-x-2 rounded-lg bg-white p-4 text-gray-600 shadow-md dark:bg-gray-50 dark:text-gray-400">
-        <LoaderPinwheel
-          className="h-5 w-5 animate-spin"
-          style={{ strokeWidth: "0.8px" }}
-        />
-        <span>Loading...</span>
+      <div className="rounded-[24px] border border-border/80 bg-card p-5 text-muted-foreground">
+        <div className="flex items-center gap-3">
+          <LoaderPinwheel
+            className="h-5 w-5 animate-spin"
+            style={{ strokeWidth: "0.8px" }}
+          />
+          Loading statistics...
+        </div>
       </div>
     );
   }
 
-  // Destructure the fetched data for easier usage
-  const {
-    total,
-    downloading,
-    paused,
-    completed,
-    error: errorCount,
-    photo,
-    video,
-    audio,
-    file,
-  } = data;
-
-  // Prepare an array of completed file types with their respective icons
-  const completedTypes = [
-    {
-      label: "Photo",
-      value: photo,
-      // eslint-disable-next-line jsx-a11y/alt-text
-      icon: <Image className="h-5 w-5 text-blue-500" />,
-    },
-    {
-      label: "Video",
-      value: video,
-      icon: <Video className="h-5 w-5 text-green-500" />,
-    },
-    {
-      label: "Audio",
-      value: audio,
-      icon: <Music className="h-5 w-5 text-purple-500" />,
-    },
-    {
-      label: "File",
-      value: file,
-      icon: <File className="h-5 w-5 text-gray-500" />,
-    },
+  const overviewStats = [
+    { label: "Total files", value: data.total, icon: FileText },
+    { label: "Downloading", value: data.downloading, icon: Download },
+    { label: "Paused", value: data.paused, icon: PauseCircle },
+    { label: "Completed", value: data.completed, icon: CheckCircle },
+    { label: "Error", value: data.error, icon: AlertTriangle },
   ];
 
-  const avgStatFields = [
+  const speedStats = [
     {
       label: "Avg",
-      value: prettyBytes(data.speedStats.avgSpeed, { bits: settings?.speedUnits === 'bits' }) + "/s",
+      value:
+        prettyBytes(data.speedStats.avgSpeed, {
+          bits: settings?.speedUnits === "bits",
+        }) + "/s",
       icon: PauseCircle,
-      color: "text-blue-500",
-      bgColor: "bg-blue-100",
+      colorClass: "bg-[#f9d7dd] text-[#e60023]",
     },
     {
       label: "Max",
-      value: prettyBytes(data.speedStats.maxSpeed, { bits: settings?.speedUnits === 'bits' }) + "/s",
+      value:
+        prettyBytes(data.speedStats.maxSpeed, {
+          bits: settings?.speedUnits === "bits",
+        }) + "/s",
       icon: ArrowUp,
-      color: "text-green-500",
-      bgColor: "bg-green-100",
+      colorClass: "bg-[#dce7dd] text-[#103c25]",
     },
     {
       label: "Median",
-      value: prettyBytes(data.speedStats.medianSpeed, { bits: settings?.speedUnits === 'bits' }) + "/s",
+      value:
+        prettyBytes(data.speedStats.medianSpeed, {
+          bits: settings?.speedUnits === "bits",
+        }) + "/s",
       icon: LineChart,
-      color: "text-purple-500",
-      bgColor: "bg-purple-100",
+      colorClass: "bg-[#ebe2f8] text-[#6845ab]",
     },
     {
       label: "Min",
-      value: prettyBytes(data.speedStats.minSpeed, { bits: settings?.speedUnits === 'bits' }) + "/s",
+      value:
+        prettyBytes(data.speedStats.minSpeed, {
+          bits: settings?.speedUnits === "bits",
+        }) + "/s",
       icon: ArrowDown,
-      color: "text-red-500",
-      bgColor: "bg-red-100",
+      colorClass: "bg-[#f6dddd] text-[#9e0a0a]",
     },
   ];
 
-  return (
-    <div className="space-y-6 rounded-lg bg-gray-50 p-2 dark:bg-gray-800 md:p-6">
-      <div className="flex-1 rounded-lg bg-white p-4 shadow-md dark:bg-gray-900">
-        <div className="flex items-center space-x-3 border-gray-200">
-          <h3 className="text-md flex items-center space-x-2 font-semibold text-gray-700 dark:text-gray-200">
-            <CloudDownload className="h-5 w-5 text-blue-600" />
-            <span>Download Statistics</span>
-          </h3>
-        </div>
-        <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-5">
-          <div className="rounded-lg bg-gray-50 p-4 shadow-sm dark:bg-gray-800">
-            <div className="flex items-center space-x-2">
-              <FileText className="h-5 w-5 text-gray-600 dark:text-gray-400" />
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                Total Files
-              </span>
-            </div>
-            <div className="mt-2 text-center text-lg font-semibold text-gray-800 dark:text-gray-200">
-              {total}
-            </div>
-          </div>
-          <div className="rounded-lg bg-gray-50 p-4 shadow-sm dark:bg-gray-800">
-            <div className="flex items-center space-x-2">
-              <Download className="h-5 w-5 text-blue-600" />
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                Downloading
-              </span>
-            </div>
-            <div className="mt-2 text-center text-lg font-semibold text-gray-800 dark:text-gray-200">
-              {downloading}
-            </div>
-          </div>
-          <div className="rounded-lg bg-gray-50 p-4 shadow-sm dark:bg-gray-800">
-            <div className="flex items-center space-x-2">
-              <PauseCircle className="h-5 w-5 text-yellow-500" />
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                Paused
-              </span>
-            </div>
-            <div className="mt-2 text-center text-lg font-semibold text-gray-800 dark:text-gray-200">
-              {paused}
-            </div>
-          </div>
-          <div className="rounded-lg bg-gray-50 p-4 shadow-sm dark:bg-gray-800">
-            <div className="flex items-center space-x-2">
-              <CheckCircle className="h-5 w-5 text-green-600" />
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                Completed
-              </span>
-            </div>
-            <div className="mt-2 text-center text-lg font-semibold text-gray-800 dark:text-gray-200">
-              {completed}
-            </div>
-          </div>
-          <div className="rounded-lg bg-gray-50 p-4 shadow-sm dark:bg-gray-800">
-            <div className="flex items-center space-x-2">
-              <AlertTriangle className="h-5 w-5 text-red-600" />
-              <span className="text-sm text-gray-600 dark:text-gray-400">
-                Error
-              </span>
-            </div>
-            <div className="mt-2 text-center text-lg font-semibold text-gray-800 dark:text-gray-200">
-              {errorCount}
-            </div>
-          </div>
-        </div>
-      </div>
+  const completedTypes = [
+    { label: "Photo", value: data.photo, icon: Image },
+    { label: "Video", value: data.video, icon: Video },
+    { label: "Audio", value: data.audio, icon: Music },
+    { label: "File", value: data.file, icon: File },
+  ];
 
-      <div className="flex-1 rounded-lg bg-white p-4 shadow-md dark:bg-gray-900">
-        <div className="flex items-center space-x-3 border-gray-200 dark:border-gray-700">
-          <h3 className="text-md flex items-center space-x-2 text-nowrap font-semibold text-gray-700 dark:text-gray-200">
-            <Clock className="h-5 w-5 text-yellow-500" />
-            <span>Speed Statistics</span>
-            <span className="text-sm font-medium text-gray-500 dark:text-gray-400">
-              ({data.speedStats.interval / 60} minute interval)
-            </span>
-          </h3>
+  return (
+    <div className="space-y-6">
+      <SectionCard
+        icon={CloudDownload}
+        title="Download statistics"
+        caption="Current queue and completed totals"
+      >
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          {overviewStats.map((stat) => (
+            <MetricTile
+              key={stat.label}
+              label={stat.label}
+              value={String(stat.value)}
+              icon={stat.icon}
+            />
+          ))}
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
-          {avgStatFields.map((stat, index) => (
+      </SectionCard>
+
+      <SectionCard
+        icon={Clock}
+        title="Speed statistics"
+        caption={`${data.speedStats.interval / 60} minute interval`}
+      >
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {speedStats.map((stat) => (
             <div
-              key={index}
-              className="flex flex-col space-y-3 rounded-xl border border-gray-100 p-4 transition-colors hover:border-gray-200 dark:border-gray-700 dark:hover:border-gray-600"
+              key={stat.label}
+              className="rounded-[22px] border border-border/80 bg-muted/60 p-4"
             >
-              <div className="flex items-center space-x-2">
-                <div className={`rounded-lg p-2 ${stat.bgColor}`}>
-                  <stat.icon className={`h-5 w-5 ${stat.color}`} />
+              <div className="flex items-center gap-3">
+                <div
+                  className={`flex h-10 w-10 items-center justify-center rounded-full ${stat.colorClass}`}
+                >
+                  <stat.icon className="h-4 w-4" />
                 </div>
-                <span className="text-sm font-medium text-gray-500 dark:text-gray-400">
-                  {stat.label}
-                </span>
+                <span className="text-sm text-muted-foreground">{stat.label}</span>
               </div>
-              <div className="text-lg font-semibold text-gray-800 dark:text-gray-200">
+              <p className="mt-4 text-lg font-semibold text-foreground">
                 {stat.value}
-              </div>
+              </p>
             </div>
           ))}
         </div>
-      </div>
+      </SectionCard>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-        <div className="flex-1 rounded-lg bg-white p-4 shadow-md dark:bg-gray-900 md:col-span-2">
-          <h3 className="text-md flex items-center space-x-2 font-semibold text-gray-700 dark:text-gray-200">
-            <CheckCircle className="h-5 w-5 text-green-600" />
-            <span>Completed by Type</span>
-          </h3>
-          <ul className="mt-4 grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.4fr_0.9fr]">
+        <SectionCard
+          icon={CheckCircle}
+          title="Completed by type"
+          caption="What the downloader is finishing most"
+        >
+          <div className="grid grid-cols-2 gap-3">
             {completedTypes.map((type) => (
-              <li
+              <MetricTile
                 key={type.label}
-                className="rounded-lg bg-gray-50 p-3 shadow-sm dark:bg-gray-800"
-              >
-                <div className="flex items-center space-x-2">
-                  {type.icon}
-                  <span className="text-sm text-gray-600 dark:text-gray-400">
-                    {type.label}
-                  </span>
-                </div>
-                <div className="mt-2 text-lg font-semibold text-gray-800 dark:text-gray-200">
-                  {type.value}
-                </div>
-              </li>
+                label={type.label}
+                value={String(type.value)}
+                icon={type.icon}
+              />
             ))}
-          </ul>
-        </div>
+          </div>
+        </SectionCard>
 
-        <div className="flex-1 rounded-lg bg-white p-4 shadow-md dark:bg-gray-900">
-          <h3 className="text-md flex items-center space-x-2 font-semibold text-gray-700 dark:text-gray-200">
-            <Network className="h-5 w-5 text-gray-500" />
-            <span>Network Statistics</span>
-          </h3>
-          <div className="mt-4 h-full">
-            <div className="flex items-center justify-center space-x-2 rounded-lg bg-gray-50 p-4 shadow-sm dark:bg-gray-800">
-              <Upload className="h-5 w-5 text-yellow-500" />
-              <span className="text-lg font-semibold text-gray-800 dark:text-gray-200">
-                {prettyBytes(data.networkStatistics.sentBytes)}
-              </span>
-            </div>
-            <div className="mt-4 flex items-center justify-center space-x-2 rounded-lg bg-gray-50 p-4 shadow-sm dark:bg-gray-800">
-              <Download className="h-5 w-5 text-blue-600" />
-              <span className="text-lg font-semibold text-gray-800 dark:text-gray-200">
-                {prettyBytes(data.networkStatistics.receivedBytes)}
-              </span>
-            </div>
-            <div className="mt-4 flex items-center justify-between">
+        <SectionCard
+          icon={Network}
+          title="Network statistics"
+          caption="Traffic since last reset"
+        >
+          <div className="space-y-3">
+            <MetricRow
+              icon={Upload}
+              label="Sent"
+              value={prettyBytes(data.networkStatistics.sentBytes)}
+            />
+            <MetricRow
+              icon={Download}
+              label="Received"
+              value={prettyBytes(data.networkStatistics.receivedBytes)}
+            />
+            <div className="flex items-center justify-between gap-3 pt-2">
               <Button
                 variant="outline"
                 size="sm"
@@ -325,8 +245,8 @@ const FileStatistics: React.FC<FileStatisticsProps> = ({ telegramId }) => {
               >
                 {isResetMutating ? "Resetting..." : "Reset"}
               </Button>
-              <p className="text-right text-sm text-gray-400">
-                Since:{" "}
+              <p className="text-right text-xs text-muted-foreground">
+                Since{" "}
                 {formatDistanceToNow(
                   new Date(data.networkStatistics.sinceDate * 1000),
                   {
@@ -336,10 +256,81 @@ const FileStatistics: React.FC<FileStatisticsProps> = ({ telegramId }) => {
               </p>
             </div>
           </div>
-        </div>
+        </SectionCard>
       </div>
     </div>
   );
 };
+
+function SectionCard({
+  icon: Icon,
+  title,
+  caption,
+  children,
+}: {
+  icon: typeof CloudDownload;
+  title: string;
+  caption: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-[28px] border border-border/80 bg-card p-5 md:p-6">
+      <div className="mb-5 flex items-start gap-3">
+        <div className="flex h-11 w-11 items-center justify-center rounded-full bg-muted text-foreground">
+          <Icon className="h-5 w-5" />
+        </div>
+        <div>
+          <h3 className="text-xl font-semibold text-foreground">{title}</h3>
+          <p className="text-sm text-muted-foreground">{caption}</p>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function MetricTile({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof FileText;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-[22px] bg-muted/60 p-4">
+      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-card">
+          <Icon className="h-4 w-4" />
+        </div>
+        {label}
+      </div>
+      <p className="mt-4 text-2xl font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function MetricRow({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Upload;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="flex items-center justify-between rounded-[22px] bg-muted/60 p-4">
+      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-card">
+          <Icon className="h-4 w-4" />
+        </div>
+        {label}
+      </div>
+      <span className="text-lg font-semibold text-foreground">{value}</span>
+    </div>
+  );
+}
 
 export default FileStatistics;

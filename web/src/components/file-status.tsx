@@ -17,27 +17,27 @@ import useIsMobile from "@/hooks/use-is-mobile";
 export const DOWNLOAD_STATUS = {
   idle: {
     icon: Clock,
-    className: "bg-gray-100 text-gray-600",
+    className: "bg-[#f0efe9] text-[#62625b]",
     text: "Idle",
   },
   downloading: {
     icon: Download,
-    className: "bg-blue-100 text-blue-600",
+    className: "bg-[#f9d7dd] text-[#e60023]",
     text: "Downloading",
   },
   paused: {
     icon: Pause,
-    className: "bg-yellow-100 text-yellow-600",
+    className: "bg-[#f3ead7] text-[#8a5b21]",
     text: "Paused",
   },
   completed: {
     icon: CheckCircle2,
-    className: "bg-green-100 text-green-600",
+    className: "bg-[#dce7dd] text-[#103c25]",
     text: "Completed",
   },
   error: {
     icon: XCircle,
-    className: "bg-red-100 text-red-600",
+    className: "bg-[#f6dddd] text-[#9e0a0a]",
     text: "Error",
   },
 };
@@ -45,22 +45,22 @@ export const DOWNLOAD_STATUS = {
 export const TRANSFER_STATUS = {
   idle: {
     icon: Clock,
-    className: "bg-gray-100 text-gray-600",
+    className: "bg-[#f0efe9] text-[#62625b]",
     text: "Idle",
   },
   transferring: {
     icon: FolderSync,
-    className: "bg-blue-100 text-blue-600",
+    className: "bg-[#f9d7dd] text-[#e60023]",
     text: "Transferring",
   },
   completed: {
     icon: CheckCircle2,
-    className: "bg-green-100 text-green-600",
+    className: "bg-[#dce7dd] text-[#103c25]",
     text: "Transferred",
   },
   error: {
     icon: XCircle,
-    className: "bg-red-100 text-red-600",
+    className: "bg-[#f6dddd] text-[#9e0a0a]",
     text: "Transfer Error",
   },
 };
@@ -97,12 +97,12 @@ export default function FileStatus({
             exit="exit"
           >
             <TooltipWrapper content="Download Status">
-              <Badge
-                className={cn(
-                  "h-6 text-xs hover:bg-gray-200",
-                  DOWNLOAD_STATUS[file.downloadStatus].className,
-                  isMobile && "shadow-none",
-                )}
+                <Badge
+                  className={cn(
+                    "h-7 text-xs",
+                    DOWNLOAD_STATUS[file.downloadStatus].className,
+                    isMobile && "shadow-none",
+                  )}
               >
                 {DOWNLOAD_STATUS[file.downloadStatus].text}
               </Badge>
@@ -122,7 +122,7 @@ export default function FileStatus({
               <TooltipWrapper content="Transfer Status">
                 <Badge
                   className={cn(
-                    "h-6 text-xs hover:bg-gray-200",
+                    "h-7 text-xs",
                     TRANSFER_STATUS[file.transferStatus].className,
                   )}
                 >

@@ -19,7 +19,7 @@ export default function AccountPage() {
   const link = searchParams.get("link") ?? undefined;
 
   return (
-    <div className="container mx-auto px-4 py-6">
+    <div className="app-shell px-4 py-4 md:px-6 md:py-6">
       {isMobile ? <MobileHeader /> : <Header />}
       {(accountId && chatId) || (accountId && link) ? (
         <Files
@@ -32,7 +32,7 @@ export default function AccountPage() {
         <div className="flex min-h-[60vh] flex-col items-center justify-center">
           <EmptyState
             hasAccounts={true}
-            message="Select a chat to view files"
+            message="Select a chat to open the board"
           />
           {accountId && <ParseLinkButton accountId={accountId} />}
         </div>

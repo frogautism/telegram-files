@@ -60,7 +60,7 @@ export default function AutomationForm({
 }: AutomationFormProps) {
   return (
     <div className="space-y-4">
-      <div className="space-y-4 rounded-md border border-gray-200 p-4 dark:border-gray-700">
+      <AutomationSection title="Preload" enabled={auto.preload.enabled}>
         <div className="flex items-center justify-between">
           <Label htmlFor="enable-preload">Enable Preload</Label>
           <Switch
@@ -78,18 +78,18 @@ export default function AutomationForm({
           />
         </div>
         {auto.preload.enabled && (
-          <div className="space-y-4 rounded-md border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800">
+          <InfoPanel>
             <div className="flex items-start">
-              <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-cyan-400"></span>
-              <p className="text-sm leading-6 text-gray-700 dark:text-gray-300">
+              <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-primary"></span>
+              <p className="text-sm leading-6 text-muted-foreground">
                 This will enable preload for this chat. All files will be
                 loaded, but not downloaded, then you can search offline.
               </p>
             </div>
-          </div>
+          </InfoPanel>
         )}
-      </div>
-      <div className="space-y-4 rounded-md border border-gray-200 p-4 dark:border-gray-700">
+      </AutomationSection>
+      <AutomationSection title="Auto download" enabled={auto.download.enabled}>
         <div className="flex items-center justify-between">
           <Label htmlFor="enable-auto-download">Enable Auto Download</Label>
           <Switch
@@ -108,32 +108,32 @@ export default function AutomationForm({
         </div>
         {auto.download.enabled && (
           <>
-            <div className="space-y-4 rounded-md border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800">
+            <InfoPanel>
               <div className="flex items-start">
-                <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-cyan-400"></span>
-                <p className="text-sm leading-6 text-gray-700 dark:text-gray-300">
+                <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-primary"></span>
+                <p className="text-sm leading-6 text-muted-foreground">
                   This will enable auto download for this chat. Files will be
                   downloaded automatically.
                 </p>
               </div>
               <div className="flex items-start">
-                <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-cyan-400"></span>
-                <p className="text-sm leading-6 text-gray-700 dark:text-gray-300">
+                <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-primary"></span>
+                <p className="text-sm leading-6 text-muted-foreground">
                   If you enable download history, the files in historical
                   messages will be downloaded first, and then files in new
                   messages will be downloaded automatically.
                 </p>
               </div>
               <div className="flex items-start">
-                <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-cyan-400"></span>
-                <p className="text-sm leading-6 text-gray-700 dark:text-gray-300">
+                <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-primary"></span>
+                <p className="text-sm leading-6 text-muted-foreground">
                   Download Order:
-                  <span className="ml-1 rounded bg-blue-100 px-2 text-blue-700 dark:bg-blue-800 dark:text-blue-200">
+                  <span className="ml-1 rounded-full bg-card px-2 py-1 text-foreground">
                     {"Photo -> Video -> Audio -> File"}
                   </span>
                 </p>
               </div>
-            </div>
+            </InfoPanel>
             <DownloadRule
               value={auto.download.rule}
               onChange={(value) => {
@@ -148,8 +148,8 @@ export default function AutomationForm({
             />
           </>
         )}
-      </div>
-      <div className="space-y-4 rounded-md border border-gray-200 p-4 dark:border-gray-700">
+      </AutomationSection>
+      <AutomationSection title="Auto transfer" enabled={auto.transfer.enabled}>
         <div className="flex items-center justify-between">
           <Label htmlFor="enable-transfer">Enable Transfer</Label>
           <Switch
@@ -168,15 +168,15 @@ export default function AutomationForm({
         </div>
         {auto.transfer.enabled && (
           <>
-            <div className="space-y-4 rounded-md border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800">
+            <InfoPanel>
               <div className="flex items-start">
-                <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-cyan-400"></span>
-                <p className="text-sm leading-6 text-gray-700 dark:text-gray-300">
+                <span className="mr-3 mt-1.5 h-3 w-2 flex-shrink-0 rounded-full bg-primary"></span>
+                <p className="text-sm leading-6 text-muted-foreground">
                   This will enable auto transfer for this chat. Downloaded files
                   will be transferred to the specified location automatically.
                 </p>
               </div>
-            </div>
+            </InfoPanel>
             <TransferRule
               value={auto.transfer.rule}
               onChange={(value) => {
@@ -191,9 +191,37 @@ export default function AutomationForm({
             />
           </>
         )}
-      </div>
+      </AutomationSection>
     </div>
   );
+}
+
+function AutomationSection({
+  title,
+  enabled,
+  children,
+}: {
+  title: string;
+  enabled: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-4 rounded-[24px] border border-border/80 bg-card p-5">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+          {title}
+        </p>
+        <Badge variant={enabled ? "default" : "outline"} className="px-3 py-1">
+          {enabled ? "Enabled" : "Disabled"}
+        </Badge>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function InfoPanel({ children }: { children: React.ReactNode }) {
+  return <div className="space-y-4 rounded-[20px] bg-muted/60 p-4">{children}</div>;
 }
 
 interface DownloadRuleProps {
@@ -243,7 +271,7 @@ function DownloadRule({ value, onChange }: DownloadRuleProps) {
           Advanced
         </AccordionTrigger>
         <AccordionContent>
-          <div className="flex flex-col space-y-4 rounded-md border p-4 shadow">
+          <div className="flex flex-col space-y-4 rounded-[20px] bg-muted/60 p-4">
             <div className="flex flex-col space-y-2">
               <Label htmlFor="query-keyword">Query Keyword</Label>
               <Input
@@ -262,7 +290,7 @@ function DownloadRule({ value, onChange }: DownloadRuleProps) {
                   href="https://github.com/jarvis2f/telegram-files/blob/main/misc/filter-expression-guide.md"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="ml-2 text-sm text-blue-600 hover:underline"
+                   className="ml-2 text-sm text-primary hover:underline"
                 >
                   (Learn more)
                 </Link>
@@ -308,7 +336,7 @@ function DownloadRule({ value, onChange }: DownloadRuleProps) {
               </div>
             </div>
 
-            <div className="rounded-md border p-4">
+            <div className="rounded-[20px] border border-border/80 bg-card p-4">
               <div className="flex items-center justify-between">
                 <Label htmlFor="download-history">Download History</Label>
                 <Switch
@@ -327,7 +355,7 @@ function DownloadRule({ value, onChange }: DownloadRuleProps) {
                 only new files will be downloaded.
               </p>
             </div>
-            <div className="rounded-md border p-4">
+            <div className="rounded-[20px] border border-border/80 bg-card p-4">
               <div className="flex items-center justify-between">
                 <Label htmlFor="download-comment-files">
                   Download comment files
@@ -371,7 +399,7 @@ function TransferRule({ value, onChange }: TransferRuleProps) {
           Advanced
         </AccordionTrigger>
         <AccordionContent>
-          <div className="flex flex-col space-y-4 rounded-md border p-4 shadow">
+          <div className="flex flex-col space-y-4 rounded-[20px] bg-muted/60 p-4">
             <div className="flex flex-col space-y-2">
               <Label htmlFor="destination">
                 Destination folder for auto transfer
@@ -437,7 +465,7 @@ function TransferRule({ value, onChange }: TransferRuleProps) {
               />
             </div>
 
-            <div className="rounded-md border p-4">
+            <div className="rounded-[20px] border border-border/80 bg-card p-4">
               <div className="flex items-center justify-between">
                 <Label htmlFor="transfer-history">Transfer History</Label>
                 <Switch
@@ -479,7 +507,7 @@ const PolicyLegends: Record<
           Transfer files to folders based on the chat name.
         </p>
         <p className="text-xs text-muted-foreground">Example:</p>
-        <p className="inline-block rounded bg-gray-100 p-1 text-xs text-muted-foreground dark:bg-gray-800 dark:text-gray-300">
+        <p className="inline-block rounded-[14px] bg-card px-2 py-1 text-xs text-muted-foreground">
           {"/${Destination Folder}/${Telegram Id}/${Chat Id}/${file}"}
         </p>
       </div>
@@ -494,7 +522,7 @@ const PolicyLegends: Record<
           All account files will be transferred to the same folder.
         </p>
         <p className="text-xs text-muted-foreground">Example:</p>
-        <p className="inline-block rounded bg-gray-100 p-1 text-xs text-muted-foreground dark:bg-gray-800 dark:text-gray-300">
+        <p className="inline-block rounded-[14px] bg-card px-2 py-1 text-xs text-muted-foreground">
           {"/${Destination Folder}/${File Type}/${file}"}
         </p>
       </div>
@@ -511,7 +539,7 @@ const PolicyLegends: Record<
         <p className="text-sm">
           You can write a prompt to guide the AI in classifying the files. Like:
         </p>
-        <p className="inline-block rounded bg-gray-100 p-1 text-xs text-muted-foreground dark:bg-gray-800 dark:text-gray-300">
+        <p className="inline-block rounded-[14px] bg-card px-2 py-1 text-xs text-muted-foreground">
           Classify the following file into one of the categories: Work,
           Personal, Important, Others. <br />
           File name: {"{file_name}"} <br />

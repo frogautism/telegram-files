@@ -97,7 +97,9 @@ export default function FileStatusFilter({
 
   return (
     <div className="space-y-2">
-      <Label>Status</Label>
+      <Label className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        Status
+      </Label>
       <Select
         value={`${localDownloadStatus ?? ""}||${localTransferStatus ?? ""}`}
         onValueChange={(value) => handleStatusSelect(value)}

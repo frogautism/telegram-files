@@ -21,19 +21,19 @@ const ImageErrorFallback = ({
 }) => (
   <div
     className={cn(
-      "flex items-center justify-center rounded bg-gray-100",
+      "flex items-center justify-center rounded-[20px] bg-muted",
       size === "s" && "h-16 w-16",
       size === "m" && "h-32 w-32",
       size === "l" && "h-72 w-72",
       className,
     )}
   >
-    <ImageOff
-      className={cn(
-        "text-gray-400",
-        size === "s" && "h-4 w-4",
-        size === "m" && "h-8 w-8",
-        size === "l" && "h-16 w-16",
+      <ImageOff
+        className={cn(
+          "text-muted-foreground",
+          size === "s" && "h-4 w-4",
+          size === "m" && "h-8 w-8",
+          size === "l" && "h-16 w-16",
       )}
     />
   </div>
@@ -178,7 +178,7 @@ export default function FilePreview({
   const renderFileIcon = () => (
     <div
       className={cn(
-        "flex h-16 w-16 items-center justify-center rounded bg-muted",
+        "flex h-16 w-16 items-center justify-center rounded-[20px] bg-muted text-muted-foreground",
         className,
       )}
     >

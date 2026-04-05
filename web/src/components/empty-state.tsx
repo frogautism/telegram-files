@@ -4,7 +4,6 @@ import {
   Check,
   Download,
   HardDrive,
-  Loader2,
   LoaderPinwheel,
   MessageSquare,
   UserPlus,
@@ -15,12 +14,11 @@ import TelegramIcon from "@/components/telegram-icon";
 import { AccountDialog } from "@/components/account-dialog";
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { BorderBeam } from "@/components/ui/border-beam";
 import useSWR from "swr";
 import prettyBytes from "pretty-bytes";
 import { Card, CardContent } from "./ui/card";
 import { useRouter } from "next/navigation";
-import useIsMobile from "@/hooks/use-is-mobile";
+import { Badge } from "@/components/ui/badge";
 
 interface EmptyStateProps {
   isLoadingAccount?: boolean;
@@ -37,62 +35,78 @@ export function EmptyState({
   message,
   onSelectAccount,
 }: EmptyStateProps) {
-  const isMobile = useIsMobile();
   if (message) {
     return (
-      <div className="flex flex-col items-center">
-        <MessageSquare className="mb-4 h-16 w-16 text-muted-foreground" />
-        <h2 className="mb-2 text-2xl font-semibold">{message}</h2>
-        <p className="text-muted-foreground">
-          Choose a chat from the dropdown menu above to view and manage its
-          files.
-        </p>
-      </div>
+      <Card className="w-full max-w-2xl">
+        <CardContent className="flex flex-col items-center gap-4 p-8 text-center md:p-10">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted text-foreground">
+            <MessageSquare className="h-7 w-7" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-3xl font-semibold">{message}</h2>
+            <p className="text-sm text-muted-foreground">
+              Pick a chat and the board fills in.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 
   return (
-    <div className="container mx-auto px-4 py-6">
-      <div className="mb-8 flex flex-col items-center text-center">
-        {hasAccounts ? (
-          <>
-            <TelegramIcon className="mb-4 h-16 w-16 text-muted-foreground" />
-            {!isMobile && (
-              <>
-                <h2 className="mb-2 text-2xl font-semibold">
-                  Select an Account
-                </h2>
-                <p className="mb-4 max-w-md text-muted-foreground">
-                  Choose a Telegram account to view and manage your files. You
-                  can add more accounts using the button below.
-                </p>
-              </>
-            )}
-          </>
-        ) : (
-          <>
-            <TelegramIcon className="mb-4 h-16 w-16 text-muted-foreground" />
-            <h2 className="mb-2 text-2xl font-semibold">No Accounts Found</h2>
-            <p className="mb-4 max-w-md text-muted-foreground">
-              Add a Telegram account to start managing your files. You can add
-              multiple accounts and switch between them.
-            </p>
-          </>
-        )}
-        <div className="flex items-center justify-center space-x-4">
-          <AccountDialog isAdd={true}>
-            <div className="relative rounded-md">
-              <BorderBeam size={60} duration={12} delay={9} />
-              <Button variant="outline">
-                <UserPlus className="mr-2 h-4 w-4" />
-                Add Account
-              </Button>
-            </div>
-          </AccountDialog>
-        </div>
-      </div>
+    <div className="app-shell px-4 py-6 md:px-6 md:py-8">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_420px]">
+        <Card className="overflow-hidden">
+          <CardContent className="p-6 md:p-10">
+            <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_260px] lg:items-start">
+              <div className="space-y-6">
+                <Badge variant="outline" className="px-3 py-2 uppercase tracking-[0.12em]">
+                  Telegram downloader
+                </Badge>
 
-      <AllFiles />
+                <div className="space-y-4">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <TelegramIcon className="h-7 w-7" />
+                  </div>
+                  <h1 className="max-w-3xl text-4xl font-semibold leading-[0.95] sm:text-5xl md:text-[4.5rem]">
+                    Save Telegram media to a board built for browsing.
+                  </h1>
+                  <p className="max-w-xl text-base text-muted-foreground">
+                    Add an account, pick a chat, download what matters.
+                  </p>
+                </div>
+
+                <AccountDialog isAdd={true}>
+                  <Button size="lg">
+                    <UserPlus className="h-4 w-4" />
+                    Add account
+                  </Button>
+                </AccountDialog>
+              </div>
+
+              <div className="grid gap-3">
+                <MetricTile
+                  icon={hasAccounts ? Check : AlertTriangle}
+                  label="Accounts"
+                  value={String(accounts.length)}
+                />
+                <MetricTile
+                  icon={Download}
+                  label="Downloader"
+                  value={isLoadingAccount ? "Syncing" : "Ready"}
+                />
+                <MetricTile
+                  icon={HardDrive}
+                  label="Mode"
+                  value="Board"
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <AllFiles />
+      </div>
 
       {isLoadingAccount && (
         <div className="absolute inset-0 flex items-center justify-center">
@@ -104,8 +118,40 @@ export function EmptyState({
       )}
 
       {hasAccounts && accounts.length > 0 && onSelectAccount && (
-        <AccountList accounts={accounts} onSelectAccount={onSelectAccount} />
+        <div className="mt-8 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-2xl font-semibold">Accounts</h2>
+              <p className="text-sm text-muted-foreground">
+                Choose a workspace to start downloading.
+              </p>
+            </div>
+          </div>
+          <AccountList accounts={accounts} onSelectAccount={onSelectAccount} />
+        </div>
       )}
+    </div>
+  );
+}
+
+function MetricTile({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Check;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-[24px] bg-muted p-4">
+      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-card">
+          <Icon className="h-4 w-4" />
+        </div>
+        {label}
+      </div>
+      <p className="mt-4 text-2xl font-semibold text-foreground">{value}</p>
     </div>
   );
 }
@@ -119,14 +165,13 @@ interface FileCount {
 function AllFiles() {
   const router = useRouter();
   const { data, error, isLoading } = useSWR<FileCount, Error>(`/files/count`);
-  const isMobile = useIsMobile();
 
   if (error) {
     return (
-      <Card className="mx-auto mb-8 max-w-5xl">
-        <CardContent className="flex items-center justify-center p-6 text-red-500">
-          <AlertTriangle className="mr-2" />
-          Failed to load file counts
+      <Card>
+        <CardContent className="flex h-full min-h-[280px] items-center justify-center gap-3 p-6 text-destructive">
+          <AlertTriangle className="h-5 w-5" />
+          Failed to load library
         </CardContent>
       </Card>
     );
@@ -134,56 +179,75 @@ function AllFiles() {
 
   if (isLoading || !data) {
     return (
-      <Card className="mx-auto mb-8 max-w-5xl">
-        <CardContent className="flex items-center justify-center p-6 text-gray-500">
-          <Loader2 className="mr-2 animate-spin" />
-          Loading file counts...
+      <Card>
+        <CardContent className="flex h-full min-h-[280px] items-center justify-center gap-3 p-6 text-muted-foreground">
+          <LoaderPinwheel
+            className="h-5 w-5 animate-spin"
+            style={{ strokeWidth: "0.8px" }}
+          />
+          Loading library
         </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card
-      className="mx-auto mb-8 max-w-5xl"
-      onClick={() => isMobile && router.push("/files")}
-    >
-      <CardContent className="flex items-center justify-between p-3">
-        <div className="grid grid-cols-3 gap-4">
-          <div className="flex items-center justify-center gap-3 rounded-lg bg-gray-100 p-3 dark:bg-gray-800">
-            <Check className="text-green-500" />
-            <span className="hidden text-sm font-medium md:inline-block">
-              Downloaded
-            </span>
-            <span className="text-sm font-medium">{data.completed}</span>
-          </div>
-          <div className="flex items-center justify-center gap-3 rounded-lg bg-gray-100 p-3 dark:bg-gray-800">
-            <Download className="text-blue-500" />
-            <span className="hidden text-sm font-medium md:inline-block">
-              Downloading
-            </span>
-            <span className="text-sm font-medium">{data.downloading}</span>
-          </div>
-          <div className="flex items-center justify-center gap-3 rounded-lg bg-gray-100 p-3 dark:bg-gray-800">
-            <HardDrive className="text-purple-500" />
-            <span className="hidden text-sm font-medium md:inline-block">
-              Size
-            </span>
-            <span className="text-sm font-medium">
-              {prettyBytes(data.downloadedSize)}
-            </span>
-          </div>
+    <Card>
+      <CardContent className="flex h-full flex-col gap-6 p-6 md:p-8">
+        <div className="space-y-2">
+          <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            Downloaded library
+          </p>
+          <h2 className="text-3xl font-semibold leading-tight">
+            Everything you have already saved.
+          </h2>
         </div>
-        {!isMobile && (
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={() => router.push("/files")}
-          >
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-        )}
+
+        <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
+          <StatTile icon={Check} label="Downloaded" value={String(data.completed)} />
+          <StatTile
+            icon={Download}
+            label="Downloading"
+            value={String(data.downloading)}
+          />
+          <StatTile
+            icon={HardDrive}
+            label="Storage"
+            value={prettyBytes(data.downloadedSize)}
+          />
+        </div>
+
+        <Button
+          variant="secondary"
+          className="w-full"
+          onClick={() => router.push("/files")}
+        >
+          Open library
+          <ArrowRight className="h-4 w-4" />
+        </Button>
       </CardContent>
     </Card>
+  );
+}
+
+function StatTile({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: typeof Check;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-[22px] bg-muted p-4">
+      <div className="flex items-center gap-3 text-sm text-muted-foreground">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-card">
+          <Icon className="h-4 w-4" />
+        </div>
+        {label}
+      </div>
+      <p className="mt-4 text-2xl font-semibold text-foreground">{value}</p>
+    </div>
   );
 }

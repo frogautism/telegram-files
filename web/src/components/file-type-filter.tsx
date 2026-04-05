@@ -76,7 +76,9 @@ export default function FileTypeFilter({
 
   return (
     <div className="space-y-2">
-      <Label>Type</Label>
+      <Label className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        Type
+      </Label>
       <Select value={localType} onValueChange={handleTypeChange}>
         <SelectTrigger>
           <SelectValue placeholder="File type" />

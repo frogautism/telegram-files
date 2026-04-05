@@ -98,7 +98,7 @@ export default function AutomationDialog() {
 
   if (isLoading) {
     return (
-      <div className="h-8 w-32 animate-pulse bg-gray-200 dark:bg-gray-700"></div>
+      <div className="h-10 w-36 animate-pulse rounded-[16px] bg-muted"></div>
     );
   }
 
@@ -117,28 +117,30 @@ export default function AutomationDialog() {
         aria-describedby={undefined}
         onPointerDownOutside={() => setOpen(false)}
         onClick={(e) => e.stopPropagation()}
-        className="h-full w-full overflow-auto md:h-auto md:max-h-[85%] md:min-w-[400px]"
+        className="h-full w-full overflow-auto md:h-auto md:max-h-[85%] md:min-w-[560px]"
       >
         <DialogHeader>
-          <DialogTitle>
-            Update Auto Settings for {chat?.name ?? "Unknown Chat"}
+          <DialogTitle className="text-2xl">
+            Automation for {chat?.name ?? "Unknown Chat"}
           </DialogTitle>
+          <DialogDescription>
+            Configure preload, download, and transfer rules for this chat.
+          </DialogDescription>
         </DialogHeader>
-        <DialogDescription></DialogDescription>
         {!editMode && chat?.auto ? (
           <div className="space-y-4">
-            <div className="space-y-4 rounded-md border border-gray-200 p-4 dark:border-gray-700">
+            <div className="space-y-4 rounded-[24px] border border-border/80 bg-card p-5">
               <div className="flex items-center justify-between">
-                <Label className="text-sm font-semibold text-gray-900 dark:text-gray-300">
+                <Label className="text-sm font-semibold text-foreground">
                   Auto Preload
                 </Label>
                 <Badge
                   variant="outline"
                   className={cn(
-                    "border-none bg-green-500 px-2 py-0.5 text-xs text-white dark:bg-green-800 dark:text-green-200",
+                    "border-none px-2 py-1 text-xs",
                     chat.auto.preload.enabled
-                      ? "bg-green-500 dark:bg-green-800 dark:text-green-200"
-                      : "bg-gray-500 dark:bg-gray-800 dark:text-gray-300",
+                      ? "bg-[#dce7dd] text-[#103c25]"
+                      : "bg-muted text-muted-foreground",
                   )}
                 >
                   {chat.auto.preload.enabled ? "Enabled" : "Disabled"}
@@ -150,18 +152,18 @@ export default function AutomationDialog() {
                 </p>
               )}
             </div>
-            <div className="space-y-4 rounded-md border border-gray-200 p-4 dark:border-gray-700">
+            <div className="space-y-4 rounded-[24px] border border-border/80 bg-card p-5">
               <div className="flex items-center justify-between">
-                <Label className="text-sm font-semibold text-gray-900 dark:text-gray-300">
+                <Label className="text-sm font-semibold text-foreground">
                   Auto Download
                 </Label>
                 <Badge
                   variant="outline"
                   className={cn(
-                    "border-none px-2 py-0.5 text-xs text-white",
+                    "border-none px-2 py-1 text-xs",
                     chat.auto.download.enabled
-                      ? "bg-green-500 dark:bg-green-800 dark:text-green-200"
-                      : "bg-gray-500 dark:bg-gray-800 dark:text-gray-300",
+                      ? "bg-[#dce7dd] text-[#103c25]"
+                      : "bg-muted text-muted-foreground",
                   )}
                 >
                   {chat.auto.download.enabled ? "Enabled" : "Disabled"}
@@ -176,31 +178,31 @@ export default function AutomationDialog() {
                   )}
                   <div className="space-y-3">
                     {/* Query Keyword Section */}
-                    <div className="rounded-lg bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="rounded-[20px] bg-muted/60 p-3">
                       <div className="flex flex-col space-y-1">
-                        <span className="text-xs font-medium text-gray-500">
+                        <span className="text-xs font-medium text-muted-foreground">
                           Query Keyword
                         </span>
-                        <span className="text-sm text-gray-500 dark:text-gray-300">
+                        <span className="text-sm text-muted-foreground">
                           {chat.auto.download.rule.query ||
                             "No keyword specified"}
                         </span>
                       </div>
                     </div>
-                    <div className="rounded-lg bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="rounded-[20px] bg-muted/60 p-3">
                       <div className="flex flex-col space-y-1">
-                        <span className="text-xs font-medium text-gray-500">
+                        <span className="text-xs font-medium text-muted-foreground">
                           Filter Expression
                         </span>
-                        <span className="text-sm text-gray-500 dark:text-gray-300">
+                        <span className="text-sm text-muted-foreground">
                           {chat.auto.download.rule.filterExpr ||
                             "No filter expression specified"}
                         </span>
                       </div>
                     </div>
 
-                    <div className="rounded-lg bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
-                      <span className="text-xs font-medium text-gray-500">
+                    <div className="rounded-[20px] bg-muted/60 p-3">
+                      <span className="text-xs font-medium text-muted-foreground">
                         File Types
                       </span>
                       <div className="mt-2 flex flex-wrap gap-2">
@@ -209,28 +211,28 @@ export default function AutomationDialog() {
                             <Badge
                               key={type}
                               variant="secondary"
-                              className="flex items-center gap-1 border-gray-200 bg-white px-3 py-1 capitalize text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                                className="flex items-center gap-1 bg-card px-3 py-1 capitalize text-foreground"
                             >
                               {type}
                             </Badge>
                           ))
                         ) : (
-                          <span className="text-sm text-gray-500 dark:text-gray-300">
+                          <span className="text-sm text-muted-foreground">
                             No file types selected
                           </span>
                         )}
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between rounded-lg bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
-                      <span className="text-xs font-medium text-gray-500">
+                    <div className="flex items-center justify-between rounded-[20px] bg-muted/60 p-3">
+                      <span className="text-xs font-medium text-muted-foreground">
                         Download History
                       </span>
                       <Badge
                         className={cn(
-                          "border-none px-2 py-0.5 text-xs text-white",
+                          "border-none px-2 py-1 text-xs",
                           !chat.auto.download.rule.downloadHistory &&
-                            "bg-gray-500 dark:bg-gray-800 dark:text-gray-300",
+                            "bg-muted text-muted-foreground",
                         )}
                       >
                         {chat.auto.download.rule.downloadHistory
@@ -239,15 +241,15 @@ export default function AutomationDialog() {
                       </Badge>
                     </div>
 
-                    <div className="flex items-center justify-between rounded-lg bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
-                      <span className="text-xs font-medium text-gray-500">
+                    <div className="flex items-center justify-between rounded-[20px] bg-muted/60 p-3">
+                      <span className="text-xs font-medium text-muted-foreground">
                         Download Comment Files
                       </span>
                       <Badge
                         className={cn(
-                          "border-none px-2 py-0.5 text-xs text-white",
+                          "border-none px-2 py-1 text-xs",
                           !chat.auto.download.rule.downloadCommentFiles &&
-                            "bg-gray-500 dark:bg-gray-800 dark:text-gray-300",
+                            "bg-muted text-muted-foreground",
                         )}
                       >
                         {chat.auto.download.rule.downloadCommentFiles
@@ -260,18 +262,18 @@ export default function AutomationDialog() {
               )}
             </div>
 
-            <div className="space-y-4 rounded-md border border-gray-200 p-4 dark:border-gray-700">
+            <div className="space-y-4 rounded-[24px] border border-border/80 bg-card p-5">
               <div className="flex items-center justify-between">
-                <Label className="text-sm font-semibold text-gray-900 dark:text-gray-300">
+                <Label className="text-sm font-semibold text-foreground">
                   Auto Transfer
                 </Label>
                 <Badge
                   variant="outline"
                   className={cn(
-                    "border-none px-2 py-0.5 text-xs text-white",
+                    "border-none px-2 py-1 text-xs",
                     chat.auto.transfer.enabled
-                      ? "bg-green-500 dark:bg-green-800 dark:text-green-200"
-                      : "bg-gray-500 dark:bg-gray-800 dark:text-gray-300",
+                      ? "bg-[#dce7dd] text-[#103c25]"
+                      : "bg-muted text-muted-foreground",
                   )}
                 >
                   {chat.auto.transfer.enabled ? "Enabled" : "Disabled"}
@@ -285,19 +287,19 @@ export default function AutomationDialog() {
                     </p>
                   )}
                   <div className="space-y-3">
-                    <div className="rounded-lg bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="rounded-[20px] bg-muted/60 p-3">
                       <div className="flex flex-col space-y-1">
-                        <span className="text-xs font-medium text-gray-500">
+                        <span className="text-xs font-medium text-muted-foreground">
                           Destination Folder
                         </span>
-                        <span className="text-sm text-gray-500 dark:text-gray-300">
+                        <span className="text-sm text-muted-foreground">
                           {chat.auto.transfer.rule.destination}
                         </span>
                       </div>
                     </div>
-                    <div className="flex flex-col space-y-3 rounded-lg bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
+                    <div className="flex flex-col space-y-3 rounded-[20px] bg-muted/60 p-3">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-gray-500 dark:text-gray-300">
+                          <span className="text-xs text-muted-foreground">
                           Transfer Policy
                         </span>
                         <Badge variant="outline" className="font-normal">
@@ -306,28 +308,28 @@ export default function AutomationDialog() {
                       </div>
                       {chat.auto.transfer.rule.transferPolicy ===
                         "GROUP_BY_AI" && (
-                        <div className="mt-2 w-full whitespace-pre-line rounded-md bg-gray-100 p-2 text-xs text-gray-500 dark:bg-gray-700 dark:text-gray-300">
+                        <div className="mt-2 w-full whitespace-pre-line rounded-[16px] bg-card p-2 text-xs text-muted-foreground">
                           {chat.auto.transfer.rule.extra.promptTemplate}
                         </div>
                       )}
                     </div>
-                    <div className="flex items-center justify-between rounded-lg bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
-                      <span className="text-xs text-gray-500 dark:text-gray-300">
+                    <div className="flex items-center justify-between rounded-[20px] bg-muted/60 p-3">
+                      <span className="text-xs text-muted-foreground">
                         Duplication Policy
                       </span>
                       <Badge variant="outline" className="font-normal">
                         {chat.auto.transfer.rule.duplicationPolicy}
                       </Badge>
                     </div>
-                    <div className="flex items-center justify-between rounded-lg bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800">
-                      <span className="text-xs text-gray-500 dark:text-gray-300">
+                    <div className="flex items-center justify-between rounded-[20px] bg-muted/60 p-3">
+                      <span className="text-xs text-muted-foreground">
                         Transfer History
                       </span>
                       <Badge
                         className={cn(
-                          "border-none px-2 py-0.5 text-xs text-white",
+                          "border-none px-2 py-1 text-xs",
                           !chat.auto.transfer.rule.transferHistory &&
-                            "bg-gray-500 dark:bg-gray-800 dark:text-gray-300",
+                            "bg-muted text-muted-foreground",
                         )}
                       >
                         {chat.auto.transfer.rule.transferHistory
@@ -343,7 +345,7 @@ export default function AutomationDialog() {
         ) : (
           <AutomationForm auto={auto} onChange={setAuto} />
         )}
-        <DialogFooter className="gap-2">
+        <DialogFooter className="gap-2 border-t border-border/80 pt-4">
           {!editMode && chat?.auto ? (
             <Button variant="outline" onClick={() => setEditMode(true)}>
               Edit

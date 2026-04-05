@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import useSWR from "swr";
 import {
   Select,
@@ -22,6 +22,7 @@ import {
 } from "recharts";
 import prettyBytes from "pretty-bytes";
 import { useSettings } from "@/hooks/use-settings";
+import { Activity, BarChart3, LoaderPinwheel } from "lucide-react";
 
 // Type definitions
 type TimeRange = "1" | "2" | "3" | "4";
@@ -84,7 +85,7 @@ const timeRangeOptions = [
 
 const axisStyle = {
   fontSize: 11,
-  fill: "#6b7280", // text-gray-500
+  fill: "#62625b",
 };
 
 const TelegramStats: React.FC<TelegramStatsProps> = ({ telegramId }) => {
@@ -95,12 +96,34 @@ const TelegramStats: React.FC<TelegramStatsProps> = ({ telegramId }) => {
     `/telegram/${telegramId}/download-statistics?type=phase&timeRange=${timeRange}`,
   );
 
+  const tooltipStyle = useMemo(
+    () => ({
+      backgroundColor: "rgba(255, 255, 255, 0.96)",
+      border: "1px solid rgba(200, 200, 193, 0.8)",
+      borderRadius: "18px",
+      boxShadow: "none",
+      fontSize: "12px",
+    }),
+    [],
+  );
+
   if (error) {
-    return <div className="p-4 text-red-500">Failed to load statistics</div>;
+    return (
+      <div className="rounded-[24px] border border-border/80 bg-card p-5 text-destructive">
+        Failed to load statistics
+      </div>
+    );
   }
 
   if (isLoading || !data) {
-    return <div className="p-4 text-gray-500">Loading statistics...</div>;
+    return (
+      <div className="rounded-[24px] border border-border/80 bg-card p-5 text-muted-foreground">
+        <div className="flex items-center gap-3">
+          <LoaderPinwheel className="h-5 w-5 animate-spin" />
+          Loading statistics...
+        </div>
+      </div>
+    );
   }
 
   // Transform speed data for the chart
@@ -119,13 +142,10 @@ const TelegramStats: React.FC<TelegramStatsProps> = ({ telegramId }) => {
   }));
 
   return (
-    <div className="relative space-y-6">
-      <div className="absolute -top-14 right-1">
-        <Select
-          value={timeRange}
-          onValueChange={(value: TimeRange) => setTimeRange(value)}
-        >
-          <SelectTrigger className="w-40">
+    <div className="space-y-6">
+      <div className="flex justify-end">
+        <Select value={timeRange} onValueChange={(value: TimeRange) => setTimeRange(value)}>
+          <SelectTrigger className="w-40 bg-card">
             <SelectValue placeholder="Select time range" />
           </SelectTrigger>
           <SelectContent>
@@ -138,20 +158,25 @@ const TelegramStats: React.FC<TelegramStatsProps> = ({ telegramId }) => {
         </Select>
       </div>
 
-      <Card>
+      <Card className="border-border/80">
         <CardHeader>
-          <CardTitle className="px-1">Download Speed Over Time</CardTitle>
+          <CardTitle className="flex items-center gap-3 px-1">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+              <Activity className="h-4 w-4" />
+            </span>
+            Download speed over time
+          </CardTitle>
         </CardHeader>
         <CardContent className="px-1">
           <div className="h-80">
             {!speedChartData || speedChartData.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-gray-500">
+              <div className="flex h-full items-center justify-center text-muted-foreground">
                 No data available
               </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={speedChartData}>
-                  <CartesianGrid stroke="#e5e7eb" vertical={false} />
+                  <CartesianGrid stroke="#e5e5e0" vertical={false} />
                   <XAxis
                     dataKey="time"
                     tick={axisStyle}
@@ -177,42 +202,36 @@ const TelegramStats: React.FC<TelegramStatsProps> = ({ telegramId }) => {
                         bits: settings?.speedUnits === "bits",
                       })
                     }
-                    contentStyle={{
-                      backgroundColor: "rgba(255, 255, 255, 0.9)",
-                      border: "none",
-                      borderRadius: "6px",
-                      boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-                      fontSize: "12px",
-                    }}
+                    contentStyle={tooltipStyle}
                   />
                   <Legend wrapperStyle={axisStyle} iconType="circle" />
                   <Area
                     type="monotone"
                     dataKey="Max Speed"
-                    stroke="#06b6d4"
-                    fill="#06b6d4"
-                    fillOpacity={0.6}
+                    stroke="#103c25"
+                    fill="#103c25"
+                    fillOpacity={0.18}
                   />
                   <Area
                     type="monotone"
                     dataKey="Average Speed"
-                    stroke="#8b5cf6"
-                    fill="#8b5cf6"
-                    fillOpacity={0.8}
+                    stroke="#e60023"
+                    fill="#e60023"
+                    fillOpacity={0.14}
                   />
                   <Area
                     type="monotone"
                     dataKey="Median Speed"
-                    stroke="#f59e0b"
-                    fill="#f59e0b"
-                    fillOpacity={0.2}
+                    stroke="#6845ab"
+                    fill="#6845ab"
+                    fillOpacity={0.1}
                   />
                   <Area
                     type="monotone"
                     dataKey="Min Speed"
-                    stroke="#ec4899"
-                    fill="#ec4899"
-                    fillOpacity={0.7}
+                    stroke="#9e0a0a"
+                    fill="#9e0a0a"
+                    fillOpacity={0.08}
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -221,20 +240,25 @@ const TelegramStats: React.FC<TelegramStatsProps> = ({ telegramId }) => {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="border-border/80">
         <CardHeader>
-          <CardTitle className="px-1">Completed Downloads Over Time</CardTitle>
+          <CardTitle className="flex items-center gap-3 px-1">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+              <BarChart3 className="h-4 w-4" />
+            </span>
+            Completed downloads over time
+          </CardTitle>
         </CardHeader>
         <CardContent className="px-1">
           <div className="h-80">
             {!completionChartData || completionChartData.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-gray-500">
+              <div className="flex h-full items-center justify-center text-muted-foreground">
                 No data available
               </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={completionChartData}>
-                  <CartesianGrid stroke="#e5e7eb" vertical={false} />
+                  <CartesianGrid stroke="#e5e5e0" vertical={false} />
                   <XAxis
                     dataKey="time"
                     tickLine={false}
@@ -250,21 +274,15 @@ const TelegramStats: React.FC<TelegramStatsProps> = ({ telegramId }) => {
                   />
                   <Tooltip
                     cursor={false}
-                    contentStyle={{
-                      backgroundColor: "rgba(255, 255, 255, 0.9)",
-                      border: "none",
-                      borderRadius: "6px",
-                      boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-                      fontSize: "12px",
-                    }}
+                    contentStyle={tooltipStyle}
                   />
                   <Legend wrapperStyle={axisStyle} iconType="rect" />
                   <Bar
                     dataKey="Completed Downloads"
-                    fill="#299d90"
-                    fillOpacity={0.8}
+                    fill="#e60023"
+                    fillOpacity={0.9}
                     maxBarSize={100}
-                    radius={[4, 4, 0, 0]}
+                    radius={[10, 10, 0, 0]}
                   />
                 </BarChart>
               </ResponsiveContainer>

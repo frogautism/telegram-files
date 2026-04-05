@@ -1,66 +1,30 @@
 "use client";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+
+import React, { useEffect, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import { LoaderPinwheel, SquareChevronLeft, WandSparkles } from "lucide-react";
-import { useFiles } from "@/hooks/use-files";
 import {
-  getRowHeightPX,
-  TableRowHeightSwitch,
-  useRowHeightLocalStorage,
-} from "@/components/table-row-height-switch";
-import TableColumnFilter, {
-  type Column,
-} from "@/components/table-column-filter";
-import { cn } from "@/lib/utils";
+  LoaderPinwheel,
+  SquareChevronLeft,
+  WandSparkles,
+} from "lucide-react";
+import { useFiles } from "@/hooks/use-files";
 import FileNotFount from "@/components/file-not-found";
-import FileRow from "@/components/file-row";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { type TelegramFile } from "@/lib/types";
+import type { TelegramFile } from "@/lib/types";
 import FileViewer from "@/components/file-viewer";
 import FileFilters from "./file-filters";
 import { Badge } from "@/components/ui/badge";
 import FileBatchControl from "@/components/file-batch-control";
-
-const COLUMNS: Column[] = [
-  {
-    id: "content",
-    label: "Content",
-    isVisible: true,
-    className: "text-center",
-  },
-  { id: "type", label: "Type", isVisible: true, className: "w-16 text-center" },
-  {
-    id: "size",
-    label: "Size",
-    isVisible: true,
-    className: "w-20 text-center",
-  },
-  {
-    id: "status",
-    label: "Status",
-    isVisible: true,
-    className: "w-32 text-center",
-  },
-  {
-    id: "tags",
-    label: "Tags",
-    isVisible: true,
-    className: "w-32",
-  },
-  {
-    id: "extra",
-    label: "Extra",
-    isVisible: true,
-    className: "flex-1 max-w-44 overflow-hidden lg:max-w-none",
-  },
-  {
-    id: "actions",
-    label: "Actions",
-    isVisible: true,
-    className: "text-center w-40 min-w-40",
-  },
-];
+import FileImage from "@/components/file-image";
+import FileStatus from "@/components/file-status";
+import FileExtra from "@/components/file-extra";
+import FileControl from "@/components/file-control";
+import FileTags from "@/components/file-tags";
+import { Progress } from "@/components/ui/progress";
+import { useFileSpeed } from "@/hooks/use-file-speed";
+import prettyBytes from "pretty-bytes";
+import { cn } from "@/lib/utils";
+import { useSettings } from "@/hooks/use-settings";
 
 interface FileTableProps {
   accountId: string;
@@ -76,12 +40,7 @@ export function FileTable({
   link,
 }: FileTableProps) {
   const [selectedFiles, setSelectedFiles] = useState<Set<number>>(new Set());
-  const tableParentRef = useRef(null);
-  const [columns, setColumns] = useState<Column[]>(COLUMNS);
-  const [rowHeight, setRowHeight] = useRowHeightLocalStorage(
-    "telegramFileList",
-    "m",
-  );
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const useFilesProps = useFiles(accountId, chatId, messageThreadId, link);
   const {
     filters,
@@ -91,149 +50,98 @@ export function FileTable({
     isLoading,
     size,
     files,
+    hasMore,
     handleLoadMore,
   } = useFilesProps;
   const [currentViewFile, setCurrentViewFile] = useState<
     TelegramFile | undefined
   >();
   const [viewerOpen, setViewerOpen] = useState(false);
-  const rowVirtual = useVirtualizer({
-    count: files.length,
-    getScrollElement: () => tableParentRef.current,
-    estimateSize: (index) => {
-      const file = files[index]!;
-      const height = getRowHeightPX(rowHeight);
-
-      if (
-        file.downloadStatus === "idle" ||
-        file.downloadStatus === "completed" ||
-        file.size === 0
-      ) {
-        return height;
-      }
-      return height + 8;
-    },
-    paddingStart: 1,
-    paddingEnd: 1,
-  });
-  const virtualItems = rowVirtual.getVirtualItems();
-  const lastVirtualIndex = virtualItems[virtualItems.length - 1]?.index;
-
-  useEffect(() => {
-    rowVirtual.measure();
-  }, [rowHeight, rowVirtual]);
-
-  useEffect(() => {
-    if (lastVirtualIndex === undefined) {
-      return;
-    }
-
-    if (lastVirtualIndex >= files.length - 1) {
-      queueMicrotask(() => {
-        void handleLoadMore();
-      });
-    }
-  }, [files.length, handleLoadMore, lastVirtualIndex]);
 
   useEffect(() => {
     if (files.length === 0 || !currentViewFile) {
       return;
     }
-    const index = files.findIndex((f) => f.id === currentViewFile.id);
+
+    const index = files.findIndex((file) => file.id === currentViewFile.id);
     if (index === -1) {
       setCurrentViewFile(undefined);
       return;
     }
+
     const file = files[index]!;
     if (currentViewFile.next === undefined && file.next !== undefined) {
       setCurrentViewFile(file);
     }
   }, [currentViewFile, files]);
 
-  const dynamicClass = useMemo(() => {
-    switch (rowHeight) {
-      case "s":
-        return {
-          content: "h-6 w-6",
-          contentCell: "w-16",
-        };
-      case "m":
-        return {
-          content: "h-20 w-20",
-          contentCell: "w-24",
-        };
-      case "l":
-        return {
-          content: "h-60 w-60",
-          contentCell: "w-64",
-        };
+  useEffect(() => {
+    if (!hasMore || isLoading) {
+      return;
     }
-  }, [rowHeight]);
 
-  const handleSelectAll = () => {
+    const node = loadMoreRef.current;
+    if (!node) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) {
+          void handleLoadMore();
+        }
+      },
+      { rootMargin: "400px 0px" },
+    );
+
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [handleLoadMore, hasMore, isLoading, files.length]);
+
+  const activeFilterCount = Object.entries(filters).filter(([key, value]) => {
+    if (["offline", "sort", "order", "dateType", "sizeUnit"].includes(key)) {
+      return false;
+    }
+    if (key === "type") {
+      return value !== "media";
+    }
+    if (typeof value === "string") {
+      return value !== "";
+    }
+    if (typeof value === "boolean") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.length > 0;
+    }
+    return false;
+  }).length;
+
+  const toggleSelectAll = () => {
+    if (files.length === 0) {
+      return;
+    }
+
     if (selectedFiles.size === files.length) {
       setSelectedFiles(new Set());
-    } else {
-      setSelectedFiles(new Set(files.map((file) => file.id)));
+      return;
     }
+
+    setSelectedFiles(new Set(files.map((file) => file.id)));
   };
 
   const handleSelectFile = (fileId: number) => {
-    const newSelected = new Set(selectedFiles);
-    if (newSelected.has(fileId)) {
-      newSelected.delete(fileId);
+    const nextSelected = new Set(selectedFiles);
+    if (nextSelected.has(fileId)) {
+      nextSelected.delete(fileId);
     } else {
-      newSelected.add(fileId);
+      nextSelected.add(fileId);
     }
-    setSelectedFiles(newSelected);
+    setSelectedFiles(nextSelected);
   };
 
   return (
     <>
-      <div className="mb-6 flex flex-col flex-wrap justify-between gap-2 md:flex-row">
-        <div className="flex items-center gap-3">
-          {messageThreadId && (
-            <Button
-              variant="link"
-              onClick={() => {
-                window.history.back();
-              }}
-            >
-              <SquareChevronLeft className="h-4 w-4" />
-              Back
-            </Button>
-          )}
-          {link ? (
-            <Badge variant="outline" className="flex h-full bg-accent">
-              <WandSparkles className="mr-2 h-4 w-4" />
-              {link}
-            </Badge>
-          ) : (
-            <>
-              <Badge variant="outline" className="flex h-full bg-accent">
-                {filters.type.charAt(0).toUpperCase() + filters.type.slice(1)}
-              </Badge>
-              <FileFilters
-                telegramId={accountId}
-                chatId={chatId}
-                filters={filters}
-                onFiltersChange={handleFilterChange}
-                clearFilters={clearFilters}
-              />
-            </>
-          )}
-        </div>
-        <div className="hidden gap-4 md:flex">
-          <TableColumnFilter
-            columns={columns}
-            onColumnConfigChange={setColumns}
-          />
-          <TableRowHeightSwitch
-            rowHeight={rowHeight}
-            setRowHeightAction={setRowHeight}
-          />
-        </div>
-      </div>
       {currentViewFile && (
         <FileViewer
           open={viewerOpen}
@@ -243,7 +151,53 @@ export function FileTable({
           {...useFilesProps}
         />
       )}
-      <div className="h-[calc(100vh-13rem)] space-y-4 overflow-hidden">
+
+      <div className="space-y-6">
+        <div className="flex flex-col gap-4 rounded-[28px] bg-muted p-4 md:flex-row md:items-center md:justify-between md:p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            {messageThreadId && (
+              <Button variant="ghost" onClick={() => window.history.back()}>
+                <SquareChevronLeft className="h-4 w-4" />
+                Back
+              </Button>
+            )}
+
+            {link ? (
+              <Badge variant="outline" className="gap-2 px-3 py-2">
+                <WandSparkles className="h-3.5 w-3.5" />
+                {link}
+              </Badge>
+            ) : (
+              <>
+                <Badge variant="outline" className="px-3 py-2 capitalize">
+                  {filters.type}
+                </Badge>
+                <Badge variant="outline" className="px-3 py-2">
+                  {files.length} pins
+                </Badge>
+                {activeFilterCount > 0 && (
+                  <Badge variant="secondary" className="px-3 py-2">
+                    {activeFilterCount} filters
+                  </Badge>
+                )}
+                <FileFilters
+                  telegramId={accountId}
+                  chatId={chatId}
+                  filters={filters}
+                  onFiltersChange={handleFilterChange}
+                  clearFilters={clearFilters}
+                />
+              </>
+            )}
+          </div>
+
+          <Button variant="secondary" size="sm" onClick={toggleSelectAll}>
+            {selectedFiles.size === files.length && files.length > 0
+              ? "Clear selection"
+              : "Select visible"}
+          </Button>
+        </div>
+
         <FileBatchControl
           files={files}
           selectedFiles={selectedFiles}
@@ -251,81 +205,180 @@ export function FileTable({
           updateField={updateField}
         />
 
-        <div
-          className="no-scrollbar relative h-full overflow-auto rounded-md border"
-          ref={tableParentRef}
-        >
-          <div className="sticky top-0 z-20 flex h-10 items-center border-b bg-background/90 text-sm text-muted-foreground backdrop-blur-sm">
-            <div className="w-[30px] text-center">
-              <Checkbox
-                checked={selectedFiles.size === files.length}
-                onCheckedChange={handleSelectAll}
-              />
-            </div>
-            {columns.map((col) =>
-              col.isVisible ? (
-                <div
-                  key={col.id}
-                  suppressHydrationWarning
-                  className={cn(
-                    col.className ?? "",
-                    col.id === "content" ? dynamicClass.contentCell : "",
-                  )}
-                >
-                  {col.label}
-                </div>
-              ) : null,
-            )}
-          </div>
-          {size === 1 && isLoading && (
-            <div className="sticky left-1/2 top-0 z-10 flex h-full w-full items-center justify-center bg-accent">
+        <div className="rounded-[32px] border border-border/80 bg-card p-4 md:p-6">
+          {size === 1 && isLoading ? (
+            <div className="flex min-h-[60vh] items-center justify-center">
               <LoaderPinwheel
                 className="h-8 w-8 animate-spin"
                 style={{ strokeWidth: "0.8px" }}
               />
             </div>
-          )}
-          <div className="h-full">
-            <div
-              className={cn("relative w-full")}
-              style={{ height: `${rowVirtual.getTotalSize()}px` }}
-            >
-              {files.length !== 0 &&
-                virtualItems.map((virtualRow) => {
-                  const file = files[virtualRow.index]!;
-                  return (
-                    <FileRow
-                      index={virtualRow.index}
-                      className={cn(
-                        "absolute left-0 top-0 flex w-full items-center",
-                      )}
-                      style={{
-                        height: `${virtualRow.size}px`,
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                      ref={rowVirtual.measureElement}
-                      file={file}
-                      updateField={updateField}
-                      checked={selectedFiles.has(file.id)}
-                      onCheckedChange={() => handleSelectFile(file.id)}
-                      onFileClick={() => {
-                        setCurrentViewFile(file);
-                        setViewerOpen(true);
-                      }}
-                      properties={{
-                        rowHeight: rowHeight,
-                        dynamicClass,
-                        columns,
-                      }}
-                      key={`${file.messageId}-${file.uniqueId}-${virtualRow.index}`}
+          ) : files.length === 0 ? (
+            <FileNotFount />
+          ) : (
+            <>
+              <div className="columns-1 gap-4 md:columns-2 xl:columns-3 2xl:columns-4">
+                {files.map((file) => (
+                  <FilePinCard
+                    key={`${file.messageId}-${file.uniqueId}`}
+                    file={file}
+                    checked={selectedFiles.has(file.id)}
+                    onCheckedChange={() => handleSelectFile(file.id)}
+                    onFileClick={() => {
+                      setCurrentViewFile(file);
+                      setViewerOpen(true);
+                    }}
+                    updateField={updateField}
+                  />
+                ))}
+              </div>
+
+              <div ref={loadMoreRef} className="flex justify-center pt-6">
+                {hasMore ? (
+                  <div className="inline-flex items-center gap-3 rounded-full bg-muted px-4 py-3 text-sm text-muted-foreground">
+                    <LoaderPinwheel
+                      className="h-4 w-4 animate-spin"
+                      style={{ strokeWidth: "0.8px" }}
                     />
-                  );
-                })}
-            </div>
-            {!isLoading && files.length === 0 && <FileNotFount />}
-          </div>
+                    Loading more pins
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center rounded-full bg-muted px-4 py-3 text-sm text-muted-foreground">
+                    End of board
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </>
   );
+}
+
+function FilePinCard({
+  file,
+  checked,
+  onCheckedChange,
+  onFileClick,
+  updateField,
+}: {
+  file: TelegramFile;
+  checked: boolean;
+  onCheckedChange: () => void;
+  onFileClick: () => void;
+  updateField: (
+    uniqueId: string,
+    patch: Partial<TelegramFile>,
+  ) => Promise<void>;
+}) {
+  const { settings } = useSettings();
+  const { downloadProgress, downloadSpeed } = useFileSpeed(file);
+
+  return (
+    <div className="mb-4 break-inside-avoid">
+      <div
+        className={cn(
+          "overflow-hidden rounded-[28px] border border-border/80 bg-card transition-colors hover:bg-muted/40",
+          checked && "border-primary",
+        )}
+      >
+        <div className="relative p-3">
+          <div
+            className="absolute left-5 top-5 z-10"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <Checkbox checked={checked} onCheckedChange={onCheckedChange} />
+          </div>
+
+          {file.reactionCount > 0 && (
+            <Badge className="absolute right-5 top-5 z-10 rounded-full bg-primary px-3 py-1 text-xs text-primary-foreground">
+              {file.reactionCount}
+            </Badge>
+          )}
+
+          <button type="button" className="block w-full text-left" onClick={onFileClick}>
+            <div
+              className={cn(
+                "overflow-hidden rounded-[24px] border-[8px] border-white bg-muted",
+                getPreviewAspect(file),
+              )}
+            >
+              <FileImage file={file} className="h-full w-full object-cover" />
+            </div>
+          </button>
+        </div>
+
+        <div className="space-y-4 px-4 pb-4 pt-1">
+          <div className="space-y-3">
+            <FileExtra file={file} rowHeight="s" ellipsis={true} />
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>{prettyBytes(file.size)}</span>
+              <span>&bull;</span>
+              <span className="capitalize">{file.type}</span>
+              {downloadSpeed > 0 && file.downloadStatus === "downloading" && (
+                <>
+                  <span>&bull;</span>
+                  <span>
+                    {prettyBytes(downloadSpeed, {
+                      bits: settings?.speedUnits === "bits",
+                    })}
+                    /s
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <FileStatus file={file} className="justify-start" />
+            {file.loaded && (
+              <FileTags
+                file={file}
+                onTagsUpdate={(tags) =>
+                  updateField(file.uniqueId, { tags: tags.join(",") })
+                }
+              />
+            )}
+          </div>
+
+          {downloadProgress > 0 && downloadProgress !== 100 && (
+            <div className="space-y-2">
+              <Progress value={downloadProgress} className="h-2" />
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{downloadProgress.toFixed(0)}%</span>
+                <span>{prettyBytes(file.downloadedSize)}</span>
+              </div>
+            </div>
+          )}
+
+          <div onClick={(event) => event.stopPropagation()}>
+            <FileControl
+              file={file}
+              downloadSpeed={downloadSpeed}
+              hovered={true}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getPreviewAspect(file: TelegramFile) {
+  if (file.extra?.width && file.extra?.height) {
+    if (file.extra.height > file.extra.width * 1.2) {
+      return "aspect-[4/5]";
+    }
+
+    if (file.extra.width > file.extra.height * 1.25) {
+      return "aspect-[4/3]";
+    }
+  }
+
+  if (file.type === "video") {
+    return "aspect-[4/3]";
+  }
+
+  return "aspect-square";
 }

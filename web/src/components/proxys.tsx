@@ -162,9 +162,9 @@ export default function Proxys({
 
   return (
     <div className="relative h-full">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between gap-3 rounded-[24px] bg-muted p-4">
         <div className="flex items-center space-x-2">
-          <h1 className="text-2xl font-bold">Proxys</h1>
+          <h1 className="text-2xl font-semibold">Proxys</h1>
           {telegramId && <ProxyPing accountId={telegramId} />}
         </div>
         <Button onClick={() => handleOpenDialog()}>
@@ -172,15 +172,15 @@ export default function Proxys({
         </Button>
       </div>
       {proxys.length === 0 && (
-        <div className="flex h-32 items-center justify-center">
-          <p className="text-center text-gray-500">No proxys added yet</p>
+        <div className="flex h-32 items-center justify-center rounded-[24px] bg-muted">
+          <p className="text-center text-muted-foreground">No proxys added yet</p>
         </div>
       )}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3 2xl:grid-cols-4">
         {proxys.map((proxy) => (
           <Card
             key={proxy.name}
-            className={cn("relative hover:shadow-lg", {
+            className={cn("relative overflow-hidden border-border/80 transition-colors hover:bg-muted", {
               "cursor-pointer": enableSelect,
             })}
             onClick={() => {
@@ -191,7 +191,7 @@ export default function Proxys({
               }
             }}
           >
-            <CardHeader className="p-3">
+            <CardHeader className="p-4">
               <CardTitle className="flex items-center justify-between">
                 <span className="font-semibold">{proxy.name}</span>
                 <Checkbox
@@ -200,13 +200,13 @@ export default function Proxys({
                 />
               </CardTitle>
             </CardHeader>
-            <CardContent className="p-0 px-3">
+            <CardContent className="px-4 pb-2 pt-0">
               <div className="flex items-baseline space-x-2">
                 <Badge variant="outline">{proxy.type.toUpperCase()}</Badge>
-                <p className="text-sm text-gray-400">{`${proxy.server}:${proxy.port}`}</p>
+                <p className="text-sm text-muted-foreground">{`${proxy.server}:${proxy.port}`}</p>
               </div>
             </CardContent>
-            <CardFooter className="flex justify-end space-x-2 p-1">
+            <CardFooter className="flex justify-end space-x-2 px-3 pb-3 pt-0">
               <Button
                 size="icon"
                 variant="ghost"
@@ -228,7 +228,7 @@ export default function Proxys({
         ))}
       </div>
       {enableSelect && (
-        <div className="absolute bottom-0 flex w-full flex-col-reverse items-center justify-end gap-2 sm:flex-row">
+        <div className="absolute bottom-0 flex w-full flex-col-reverse items-center justify-end gap-2 border-t border-border/80 bg-background pt-4 sm:flex-row">
           <DialogClose asChild>
             <Button
               className="w-full md:w-auto"
@@ -248,7 +248,7 @@ export default function Proxys({
         </div>
       )}
       <Dialog open={isDialogOpen} onOpenChange={handleCloseDialog}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               <span className="mr-2">
@@ -259,7 +259,7 @@ export default function Proxys({
           </DialogHeader>
           <div className="space-y-4">
             {/* Radio buttons for proxy type */}
-            <div>
+            <div className="rounded-[20px] bg-muted p-4">
               <Label className="mb-2 block">Type</Label>
               <div className="flex space-x-4">
                 <label className="flex cursor-pointer items-center">
@@ -315,7 +315,7 @@ export default function Proxys({
               </div>
             </div>
 
-            <div>
+            <div className="rounded-[20px] bg-muted p-4">
               <Label className="mb-2 block">Name</Label>
               <Input
                 name="name"
@@ -324,7 +324,7 @@ export default function Proxys({
                 placeholder="Enter proxy name"
               />
             </div>
-            <div>
+            <div className="rounded-[20px] bg-muted p-4">
               <Label className="mb-2 block">
                 Proxy server address and port number
               </Label>
@@ -354,9 +354,10 @@ export default function Proxys({
                 </div>
               </div>
             </div>
-            <Label className="mb-2 block">Authentication (optional)</Label>
-            {formState.type === "mtproto" ? (
-              <div>
+            <div className="rounded-[20px] bg-muted p-4">
+              <Label className="mb-2 block">Authentication (optional)</Label>
+              {formState.type === "mtproto" ? (
+                <div>
                 <label className="block text-xs font-medium text-gray-500">
                   Secret
                 </label>
@@ -366,10 +367,10 @@ export default function Proxys({
                   onChange={handleInputChange}
                   placeholder="Enter secret"
                 />
-              </div>
-            ) : (
-              <>
-                <div>
+                </div>
+              ) : (
+                <>
+                  <div>
                   <label className="block text-xs font-medium text-gray-500">
                     Username
                   </label>
@@ -379,8 +380,8 @@ export default function Proxys({
                     onChange={handleInputChange}
                     placeholder="Enter username"
                   />
-                </div>
-                <div>
+                  </div>
+                  <div>
                   <label className="block text-xs font-medium text-gray-500">
                     Password
                   </label>
@@ -391,9 +392,10 @@ export default function Proxys({
                     onChange={handleInputChange}
                     placeholder="Enter password"
                   />
-                </div>
-              </>
-            )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
           <DialogFooter>
             <Button onClick={handleCloseDialog} variant="outline">

@@ -31,82 +31,97 @@ export const SettingsDialog: React.FC = () => {
           setIsOpen(!isOpen);
         }}
       >
-        <Button variant="ghost" size="icon">
+        <Button variant="ghost" size="icon" className="rounded-full border border-input bg-card">
           <Settings className="h-4 w-4" />
         </Button>
       </DialogTrigger>
       <DialogContent
-        className="md:max-w-2/3 h-full w-full max-w-full md:h-3/4 md:w-2/3"
+        className="h-full w-full max-w-full overflow-hidden md:h-[86vh] md:w-[min(1120px,92vw)] md:max-w-[1120px]"
         onPointerDownOutside={() => setIsOpen(false)}
         aria-describedby={undefined}
       >
         <VisuallyHidden>
           <DialogTitle>Settings</DialogTitle>
         </VisuallyHidden>
-        <Tabs
-          defaultValue="general"
-          className="mt-3 flex h-full flex-col overflow-hidden"
-        >
-          <TabsList className="min-h-9 justify-start overflow-auto">
-            <TabsTrigger value="general">General</TabsTrigger>
-            <TabsTrigger value="statistics">Statistics</TabsTrigger>
-            <TabsTrigger value="proxys">Proxys</TabsTrigger>
-            <TabsTrigger value="api">API</TabsTrigger>
-            <TabsTrigger value="about">About</TabsTrigger>
-          </TabsList>
-          <TabsContent value="general" className="overflow-hidden">
-            <SettingsForm />
-          </TabsContent>
-          <TabsContent value="statistics" className="h-full overflow-hidden">
-            <div className="no-scrollbar flex h-full flex-col overflow-y-scroll">
-              {accountId ? (
-                <Tabs defaultValue="panel">
-                  <TabsList className="bg-none!">
-                    <TabsTrigger
-                      value="panel"
-                      className="h-10 w-10 scale-75 data-[state=active]:bg-accent"
-                    >
-                      <LayoutPanelTopIcon />
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="phase"
-                      className="h-10 w-10 scale-75 data-[state=active]:bg-accent"
-                    >
-                      <ChartColumnIncreasingIcon />
-                    </TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="panel">
-                    <FileStatistics telegramId={accountId} />
-                  </TabsContent>
-                  <TabsContent value="phase">
-                    <FilePhaseStatistics telegramId={accountId} />
-                  </TabsContent>
-                </Tabs>
-              ) : (
-                <div className="flex flex-1 items-center justify-center">
-                  <p className="text-lg text-muted-foreground">
-                    Please select an account to view statistics
-                  </p>
+        <div className="space-y-4 overflow-hidden">
+          <div className="space-y-2 pr-10">
+            <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              Workspace settings
+            </p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-3xl font-semibold">Configure TeleFiles</h2>
+              {account?.name && (
+                <div className="rounded-full bg-muted px-4 py-2 text-sm text-muted-foreground">
+                  {account.name}
                 </div>
               )}
             </div>
-          </TabsContent>
-          <TabsContent value="proxys" className="h-full overflow-hidden">
-            <div className="no-scrollbar flex h-full flex-col overflow-y-scroll">
-              <Proxys
-                telegramId={accountId}
-                proxyName={account?.proxy}
-                enableSelect={true}
-              />
-            </div>
-          </TabsContent>
-          <TabsContent value="api" className="h-full overflow-hidden">
-            <DebugTelegramMethod />
-          </TabsContent>
-          <TabsContent value="about" className="h-full overflow-hidden">
-            <About />
-          </TabsContent>
-        </Tabs>
+          </div>
+          <Tabs
+            defaultValue="general"
+            className="flex h-[calc(100vh-11rem)] flex-col overflow-hidden md:h-[calc(86vh-7rem)]"
+          >
+            <TabsList className="justify-start overflow-auto bg-muted">
+              <TabsTrigger value="general">General</TabsTrigger>
+              <TabsTrigger value="statistics">Statistics</TabsTrigger>
+              <TabsTrigger value="proxys">Proxys</TabsTrigger>
+              <TabsTrigger value="api">API</TabsTrigger>
+              <TabsTrigger value="about">About</TabsTrigger>
+            </TabsList>
+            <TabsContent value="general" className="mt-4 overflow-hidden">
+              <SettingsForm />
+            </TabsContent>
+            <TabsContent value="statistics" className="mt-4 h-full overflow-hidden">
+              <div className="no-scrollbar flex h-full flex-col overflow-y-scroll">
+                {accountId ? (
+                  <Tabs defaultValue="panel">
+                    <TabsList className="mb-4 w-fit bg-muted">
+                      <TabsTrigger
+                        value="panel"
+                        className="h-10 w-10 data-[state=active]:bg-card"
+                      >
+                        <LayoutPanelTopIcon />
+                      </TabsTrigger>
+                      <TabsTrigger
+                        value="phase"
+                        className="h-10 w-10 data-[state=active]:bg-card"
+                      >
+                        <ChartColumnIncreasingIcon />
+                      </TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="panel">
+                      <FileStatistics telegramId={accountId} />
+                    </TabsContent>
+                    <TabsContent value="phase">
+                      <FilePhaseStatistics telegramId={accountId} />
+                    </TabsContent>
+                  </Tabs>
+                ) : (
+                  <div className="flex flex-1 items-center justify-center">
+                    <p className="text-lg text-muted-foreground">
+                      Please select an account to view statistics
+                    </p>
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+            <TabsContent value="proxys" className="mt-4 h-full overflow-hidden">
+              <div className="no-scrollbar flex h-full flex-col overflow-y-scroll">
+                <Proxys
+                  telegramId={accountId}
+                  proxyName={account?.proxy}
+                  enableSelect={true}
+                />
+              </div>
+            </TabsContent>
+            <TabsContent value="api" className="mt-4 h-full overflow-hidden">
+              <DebugTelegramMethod />
+            </TabsContent>
+            <TabsContent value="about" className="mt-4 h-full overflow-hidden">
+              <About />
+            </TabsContent>
+          </Tabs>
+        </div>
       </DialogContent>
     </Dialog>
   );

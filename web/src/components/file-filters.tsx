@@ -66,7 +66,9 @@ const SearchFilter = ({
 
   return (
     <div className="space-y-2">
-      <Label>Keyword</Label>
+      <Label className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        Keyword
+      </Label>
       <div className="relative">
         <Input
           placeholder="Search with name or caption"
@@ -77,7 +79,7 @@ const SearchFilter = ({
           <Button
             variant="ghost"
             size="icon"
-            className="absolute right-2 top-1/2 h-6 w-6 -translate-y-1/2 rounded-full text-gray-500 transition-all duration-200 hover:scale-110 hover:bg-gray-100 hover:text-gray-800"
+            className="absolute right-2 top-1/2 h-8 w-8 -translate-y-1/2 rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
             onClick={() => handleChange("")}
           >
             <X className="h-4 w-4" />
@@ -98,7 +100,9 @@ const TagsFilter = ({ tags, onChange }: TagsFilterProps) => {
 
   return (
     <div className="space-y-2">
-      <Label>Tags</Label>
+      <Label className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        Tags
+      </Label>
       <TagsSelector
         value={tags}
         onChangeAction={onChange}
@@ -156,22 +160,24 @@ const DateFilter = ({ dateType, dateRange, onChange }: DateFilterProps) => {
 
   return (
     <div className="space-y-2">
-      <Label>Date Filter</Label>
+      <Label className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        Date
+      </Label>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
             variant="outline"
-            className="w-full justify-start text-left font-normal"
+            className="w-full justify-start text-left font-normal text-muted-foreground"
           >
             <CalendarRange className="mr-2 h-4 w-4" />
             <span className="flex-1">{getDisplayText()}</span>
-            <span className="ml-2 rounded bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600">
+            <span className="ml-2 rounded-full bg-muted px-2.5 py-1 text-xs text-foreground">
               {localType === "downloaded" ? "Download" : "Sent"}
             </span>
           </Button>
         </PopoverTrigger>
         <PopoverContent
-          className="w-auto p-4"
+          className="w-auto rounded-[28px] p-4"
           side={isMobile ? undefined : "right"}
           modal={true}
         >
@@ -194,7 +200,7 @@ const DateFilter = ({ dateType, dateRange, onChange }: DateFilterProps) => {
                 Downloaded
               </Button>
             </div>
-            <div className="rounded-md border p-2">
+            <div className="rounded-[20px] border border-border/80 p-2">
               <Calendar
                 mode="range"
                 selected={{
@@ -242,14 +248,20 @@ const SizeFilter = ({ sizeRange, sizeUnit, onChange }: SizeFilterProps) => {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <Label>File Size Range</Label>
+        <Label className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+          File Size
+        </Label>
         <Popover>
           <PopoverTrigger asChild>
             <Button variant="outline" size="sm">
               {localUnit}
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-auto p-2" align="center" modal={true}>
+          <PopoverContent
+            className="w-auto rounded-[24px] p-2"
+            align="center"
+            modal={true}
+          >
             <div className="flex flex-col gap-2">
               <Button
                 size="sm"
@@ -293,10 +305,10 @@ const SizeFilter = ({ sizeRange, sizeUnit, onChange }: SizeFilterProps) => {
         />
       </div>
       <div className="flex justify-between text-sm">
-        <span className="text-zinc-500">
+        <span className="text-muted-foreground">
           {localRange[0]} {localUnit}
         </span>
-        <span className="text-zinc-500">
+        <span className="text-muted-foreground">
           {localRange[1]} {localUnit}
         </span>
       </div>
@@ -323,7 +335,9 @@ const SortFilter = ({ sort, order, onChange }: SortFilterProps) => {
 
   return (
     <div className="space-y-2">
-      <Label>Sort By</Label>
+      <Label className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        Sort
+      </Label>
       <div className="flex gap-2">
         <Select
           value={currentSort}
@@ -445,6 +459,9 @@ export default function FileFilters({
     setOpen(false);
   };
 
+  const panelClassName =
+    "rounded-[24px] border border-border/80 bg-muted/60 p-4";
+
   return (
     <Drawer
       open={open}
@@ -456,12 +473,12 @@ export default function FileFilters({
       <DrawerTrigger asChild>
         <Button
           variant="outline"
-          className={cn("relative gap-2", isMobile && "z-50 w-9")}
+          className={cn("relative gap-2", isMobile && "z-50 w-10 px-0")}
         >
           <Filter className="h-5 w-5" />
           {!isMobile && "Filters"}
           {filterCount > 0 && (
-            <span className="absolute left-0 top-0 -ml-1 -mt-1 flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-xs text-white">
+            <span className="absolute -left-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs text-primary-foreground">
               {filterCount}
             </span>
           )}
@@ -472,8 +489,8 @@ export default function FileFilters({
         <DrawerPrimitive.Content
           className={cn(
             isMobile
-              ? "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto max-h-screen flex-col rounded-t-[10px] border bg-background"
-              : "fixed bottom-2 left-2 top-2 z-50 flex w-[380px] outline-none",
+              ? "fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto max-h-screen flex-col rounded-t-[28px] border border-border/80 bg-background"
+              : "fixed bottom-2 left-2 top-2 z-50 flex w-[400px] outline-none",
           )}
           style={
             isMobile
@@ -484,110 +501,130 @@ export default function FileFilters({
           {isMobile && (
             <div className="mx-auto mt-4 h-2 w-[100px] rounded-full bg-muted" />
           )}
-          <div className="no-scrollbar flex h-full w-full grow flex-col overflow-auto rounded-[16px] bg-background shadow-lg">
-            <div className="flex-1 p-6 pb-[130px]">
-              <DrawerTitle>
-                <div className="flex items-center justify-between">
-                  <span className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
-                    Filters
-                  </span>
-                  {!noAccountSpecified && (
-                    <div className="flex items-center space-x-2">
-                      <Label
-                        htmlFor="offline"
-                        className="cursor-pointer text-zinc-500"
-                      >
-                        Offline
-                      </Label>
+          <div className="no-scrollbar flex h-full w-full grow flex-col overflow-auto rounded-[28px] bg-background">
+            <div className="flex-1 p-6 pb-[132px]">
+              <div className="space-y-5">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <DrawerTitle className="text-2xl">Filters</DrawerTitle>
+                    {!noAccountSpecified && (
+                      <div className="flex items-center gap-3 rounded-full bg-muted px-3 py-2">
+                        <Label
+                          htmlFor="offline"
+                          className="cursor-pointer text-sm text-muted-foreground"
+                        >
+                          Offline
+                        </Label>
+                        <Switch
+                          id="offline"
+                          checked={localFilters.offline}
+                          onCheckedChange={(checked) => {
+                            setLocalFilters((prev) => ({
+                              ...prev,
+                              offline: checked,
+                            }));
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <DrawerDescription>
+                    Search live Telegram data or switch to your downloaded archive.
+                  </DrawerDescription>
+                </div>
+
+                <div className="space-y-4 overflow-y-auto p-0.5">
+                  <div className={panelClassName}>
+                    <SearchFilter
+                      search={localFilters.search}
+                      onChange={handleSearchChange}
+                    />
+                  </div>
+
+                  <div className={panelClassName}>
+                    <FileTypeFilter
+                      offline={localFilters.offline}
+                      telegramId={telegramId}
+                      chatId={chatId}
+                      type={filters.type}
+                      onChange={handleTypeChange}
+                    />
+                  </div>
+
+                  {!localFilters.offline && (
+                    <div className={cn(panelClassName, "flex items-center justify-between gap-3")}>
+                      <div>
+                        <Label htmlFor="notDownload" className="text-sm font-medium text-foreground">
+                          Only not downloaded
+                        </Label>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Focus on files still waiting to be saved.
+                        </p>
+                      </div>
                       <Switch
-                        id="offline"
-                        checked={localFilters.offline}
+                        id="notDownload"
+                        checked={localFilters.downloadStatus === "idle"}
                         onCheckedChange={(checked) => {
                           setLocalFilters((prev) => ({
                             ...prev,
-                            offline: checked,
+                            downloadStatus: checked ? "idle" : undefined,
                           }));
                         }}
+                        aria-label="Not Download"
                       />
                     </div>
                   )}
+
+                  {localFilters.offline && (
+                    <>
+                      <div className={panelClassName}>
+                        <FileStatusFilter
+                          downloadStatus={localFilters.downloadStatus}
+                          transferStatus={localFilters.transferStatus}
+                          onChange={handleStatusChange}
+                        />
+                      </div>
+
+                      <div className={panelClassName}>
+                        <TagsFilter
+                          tags={localFilters.tags}
+                          onChange={handleTagsChange}
+                        />
+                      </div>
+
+                      <div className={panelClassName}>
+                        <DateFilter
+                          dateType={localFilters.dateType}
+                          dateRange={localFilters.dateRange}
+                          onChange={handleDateChange}
+                        />
+                      </div>
+
+                      <div className={panelClassName}>
+                        <SizeFilter
+                          sizeRange={localFilters.sizeRange}
+                          sizeUnit={localFilters.sizeUnit}
+                          onChange={handleSizeChange}
+                        />
+                      </div>
+
+                      <div className={panelClassName}>
+                        <SortFilter
+                          sort={localFilters.sort}
+                          order={localFilters.order}
+                          onChange={handleSortChange}
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
-              </DrawerTitle>
-              <DrawerDescription className="mb-3">
-                Default search by Telegram Client, you can choose offline to
-                search by local database.
-              </DrawerDescription>
-
-              <div className="space-y-4 overflow-y-auto p-0.5">
-                <SearchFilter
-                  search={localFilters.search}
-                  onChange={handleSearchChange}
-                />
-
-                <FileTypeFilter
-                  offline={localFilters.offline}
-                  telegramId={telegramId}
-                  chatId={chatId}
-                  type={filters.type}
-                  onChange={handleTypeChange}
-                />
-
-                {!localFilters.offline && (
-                  <div className="flex items-center justify-between rounded-md border bg-gray-100/50 px-2 py-3 dark:bg-gray-600/50">
-                    <Label htmlFor="notDownload">Filter Not Download</Label>
-                    <Switch
-                      id="notDownload"
-                      checked={localFilters.downloadStatus === "idle"}
-                      onCheckedChange={(checked) => {
-                        setLocalFilters((prev) => ({
-                          ...prev,
-                          downloadStatus: checked ? "idle" : undefined,
-                        }));
-                      }}
-                      aria-label="Not Download"
-                    />
-                  </div>
-                )}
-
-                {localFilters.offline && (
-                  <>
-                    <FileStatusFilter
-                      downloadStatus={localFilters.downloadStatus}
-                      transferStatus={localFilters.transferStatus}
-                      onChange={handleStatusChange}
-                    />
-
-                    <TagsFilter
-                      tags={localFilters.tags}
-                      onChange={handleTagsChange}
-                    />
-
-                    <DateFilter
-                      dateType={localFilters.dateType}
-                      dateRange={localFilters.dateRange}
-                      onChange={handleDateChange}
-                    />
-
-                    <SizeFilter
-                      sizeRange={localFilters.sizeRange}
-                      sizeUnit={localFilters.sizeUnit}
-                      onChange={handleSizeChange}
-                    />
-
-                    <SortFilter
-                      sort={localFilters.sort}
-                      order={localFilters.order}
-                      onChange={handleSortChange}
-                    />
-                  </>
-                )}
               </div>
             </div>
 
-            <DrawerFooter className="fixed bottom-0 left-0 right-0 bg-background">
-              <Button onClick={handleApply}>Apply Filters</Button>
+            <DrawerFooter className="fixed bottom-0 left-0 right-0 border-t border-border/80 bg-background/95 backdrop-blur">
+              <Button onClick={handleApply}>Apply filters</Button>
               <Button variant="outline" onClick={handleClear}>
-                Clear Filters
+                Clear filters
               </Button>
             </DrawerFooter>
           </div>
