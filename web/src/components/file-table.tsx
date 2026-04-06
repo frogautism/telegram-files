@@ -1,13 +1,9 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import {
-  LoaderPinwheel,
-  SquareChevronLeft,
-  WandSparkles,
-} from "lucide-react";
+import { LoaderPinwheel, SquareChevronLeft, WandSparkles } from "lucide-react";
 import { useFiles } from "@/hooks/use-files";
 import FileNotFount from "@/components/file-not-found";
 import type { TelegramFile } from "@/lib/types";
@@ -25,6 +21,10 @@ import { useFileSpeed } from "@/hooks/use-file-speed";
 import prettyBytes from "pretty-bytes";
 import { cn } from "@/lib/utils";
 import { useSettings } from "@/hooks/use-settings";
+import SpoiledWrapper from "@/components/spoiled-wrapper";
+import FileCaptionText from "@/components/file-caption-text";
+import { groupFilesByMessage, type FileGroup } from "@/lib/file-groups";
+import { formatDistanceToNow } from "date-fns";
 
 interface FileTableProps {
   accountId: string;
@@ -57,6 +57,7 @@ export function FileTable({
     TelegramFile | undefined
   >();
   const [viewerOpen, setViewerOpen] = useState(false);
+  const fileGroups = useMemo(() => groupFilesByMessage(files), [files]);
 
   useEffect(() => {
     if (files.length === 0 || !currentViewFile) {
@@ -140,6 +141,13 @@ export function FileTable({
     setSelectedFiles(nextSelected);
   };
 
+  const handleTagClick = (tag: string) => {
+    void handleFilterChange({
+      ...filters,
+      search: tag,
+    });
+  };
+
   return (
     <>
       {currentViewFile && (
@@ -218,16 +226,17 @@ export function FileTable({
           ) : (
             <>
               <div className="columns-1 gap-4 md:columns-2 xl:columns-3 2xl:columns-4">
-                {files.map((file) => (
-                  <FilePinCard
-                    key={`${file.messageId}-${file.uniqueId}`}
-                    file={file}
-                    checked={selectedFiles.has(file.id)}
-                    onCheckedChange={() => handleSelectFile(file.id)}
-                    onFileClick={() => {
+                {fileGroups.map((group) => (
+                  <FilePinGroup
+                    key={group.key}
+                    group={group}
+                    selectedFiles={selectedFiles}
+                    onCheckedChange={handleSelectFile}
+                    onFileClick={(file) => {
                       setCurrentViewFile(file);
                       setViewerOpen(true);
                     }}
+                    onTagClick={handleTagClick}
                     updateField={updateField}
                   />
                 ))}
@@ -256,109 +265,260 @@ export function FileTable({
   );
 }
 
-function FilePinCard({
-  file,
-  checked,
+function FilePinGroup({
+  group,
+  selectedFiles,
   onCheckedChange,
   onFileClick,
+  onTagClick,
   updateField,
 }: {
-  file: TelegramFile;
-  checked: boolean;
-  onCheckedChange: () => void;
-  onFileClick: () => void;
+  group: FileGroup;
+  selectedFiles: Set<number>;
+  onCheckedChange: (fileId: number) => void;
+  onFileClick: (file: TelegramFile) => void;
+  onTagClick: (tag: string) => void;
   updateField: (
     uniqueId: string,
     patch: Partial<TelegramFile>,
   ) => Promise<void>;
 }) {
-  const { settings } = useSettings();
-  const { downloadProgress, downloadSpeed } = useFileSpeed(file);
+  const grouped = group.files.length > 1;
+
+  if (!grouped) {
+    const file = group.files[0]!;
+    return (
+      <div className="mb-4 break-inside-avoid">
+        <div className="overflow-hidden rounded-[28px] border border-border/80 bg-card">
+          <FilePinCard
+            file={file}
+            checked={selectedFiles.has(file.id)}
+            onCheckedChange={() => onCheckedChange(file.id)}
+            onFileClick={() => onFileClick(file)}
+            onTagClick={onTagClick}
+            updateField={updateField}
+            grouped={false}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const firstFile = group.files[0]!;
+  const caption =
+    group.files.find((file) => file.caption.trim() !== "")?.caption ?? "";
+  const totalSize = group.files.reduce((sum, file) => sum + file.size, 0);
+  const gridCols = group.files.length >= 5 ? "grid-cols-3" : "grid-cols-2";
 
   return (
     <div className="mb-4 break-inside-avoid">
-      <div
-        className={cn(
-          "overflow-hidden rounded-[28px] border border-border/80 bg-card transition-colors hover:bg-muted/40",
-          checked && "border-primary",
-        )}
-      >
-        <div className="relative p-3">
-          <div
-            className="absolute left-5 top-5 z-10"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <Checkbox checked={checked} onCheckedChange={onCheckedChange} />
+      <div className="overflow-hidden rounded-[28px] border border-border/80 bg-card">
+        <div className="space-y-4 p-4">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <Badge
+              variant="secondary"
+              className="rounded-full px-3 py-1 text-xs"
+            >
+              {group.files.length} items
+            </Badge>
+            <span>{prettyBytes(totalSize)}</span>
+            <span>&bull;</span>
+            <span>
+              {formatDistanceToNow(new Date(firstFile.date * 1000), {
+                addSuffix: true,
+              })}
+            </span>
           </div>
 
-          {file.reactionCount > 0 && (
-            <Badge className="absolute right-5 top-5 z-10 rounded-full bg-primary px-3 py-1 text-xs text-primary-foreground">
-              {file.reactionCount}
-            </Badge>
+          {caption && (
+            <SpoiledWrapper hasSensitiveContent={firstFile.hasSensitiveContent}>
+              <FileCaptionText
+                text={caption}
+                className="line-clamp-3 text-sm leading-5 text-foreground"
+                onTagClick={onTagClick}
+              />
+            </SpoiledWrapper>
           )}
 
-          <button type="button" className="block w-full text-left" onClick={onFileClick}>
-            <div
-              className={cn(
-                "overflow-hidden rounded-[24px] border-[8px] border-white bg-muted",
-                getPreviewAspect(file),
-              )}
-            >
-              <FileImage file={file} className="h-full w-full object-cover" />
-            </div>
-          </button>
+          <div className={cn("grid gap-3", gridCols)}>
+            {group.files.map((file, index) => (
+              <div
+                key={`${file.messageId}-${file.uniqueId}`}
+                className="space-y-2 rounded-[22px] border border-border/70 bg-muted/20 p-2"
+              >
+                <div className="relative">
+                  <div
+                    className="absolute left-3 top-3 z-10"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <Checkbox
+                      checked={selectedFiles.has(file.id)}
+                      onCheckedChange={() => onCheckedChange(file.id)}
+                    />
+                  </div>
+                  <Badge className="absolute right-3 top-3 z-10 rounded-full bg-background/85 px-2 py-1 text-[11px] text-foreground shadow-sm backdrop-blur">
+                    {index + 1}
+                  </Badge>
+                  <button
+                    type="button"
+                    className="block w-full overflow-hidden rounded-[18px] bg-muted text-left"
+                    onClick={() => onFileClick(file)}
+                  >
+                    <div className="aspect-square overflow-hidden">
+                      <FileImage
+                        file={file}
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 text-xs text-muted-foreground">
+                    <div className="truncate font-medium text-foreground">
+                      {file.type === "video" ? "Video" : "Photo"}
+                    </div>
+                    <div className="truncate">{prettyBytes(file.size)}</div>
+                  </div>
+                  <div onClick={(event) => event.stopPropagation()}>
+                    <FileControl file={file} hovered={true} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FilePinCard({
+  file,
+  checked,
+  onCheckedChange,
+  onFileClick,
+  onTagClick,
+  updateField,
+  grouped,
+}: {
+  file: TelegramFile;
+  checked: boolean;
+  onCheckedChange: () => void;
+  onFileClick: () => void;
+  onTagClick: (tag: string) => void;
+  updateField: (
+    uniqueId: string,
+    patch: Partial<TelegramFile>,
+  ) => Promise<void>;
+  grouped: boolean;
+}) {
+  const { settings } = useSettings();
+  const { downloadProgress, downloadSpeed } = useFileSpeed(file);
+  const showMessageCaption = shouldShowMessageCaption(file);
+
+  return (
+    <div
+      className={cn(
+        "transition-colors hover:bg-muted/40",
+        !grouped && "rounded-[28px]",
+        checked && "bg-muted/40",
+      )}
+    >
+      <div className="relative p-3">
+        <div
+          className="absolute left-5 top-5 z-10"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <Checkbox checked={checked} onCheckedChange={onCheckedChange} />
         </div>
 
-        <div className="space-y-4 px-4 pb-4 pt-1">
-          <div className="space-y-3">
-            <FileExtra file={file} rowHeight="s" ellipsis={true} />
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>{prettyBytes(file.size)}</span>
-              <span>&bull;</span>
-              <span className="capitalize">{file.type}</span>
-              {downloadSpeed > 0 && file.downloadStatus === "downloading" && (
-                <>
-                  <span>&bull;</span>
-                  <span>
-                    {prettyBytes(downloadSpeed, {
-                      bits: settings?.speedUnits === "bits",
-                    })}
-                    /s
-                  </span>
-                </>
-              )}
-            </div>
-          </div>
+        {file.reactionCount > 0 && (
+          <Badge className="absolute right-5 top-5 z-10 rounded-full bg-primary px-3 py-1 text-xs text-primary-foreground">
+            {file.reactionCount}
+          </Badge>
+        )}
 
-          <div className="flex flex-wrap items-center gap-2">
-            <FileStatus file={file} className="justify-start" />
-            {file.loaded && (
-              <FileTags
-                file={file}
-                onTagsUpdate={(tags) =>
-                  updateField(file.uniqueId, { tags: tags.join(",") })
-                }
+        <button
+          type="button"
+          className="block w-full text-left"
+          onClick={onFileClick}
+        >
+          <div
+            className={cn(
+              "overflow-hidden rounded-[24px] border-[8px] border-white bg-muted",
+              getPreviewAspect(file),
+            )}
+          >
+            <FileImage file={file} className="h-full w-full object-cover" />
+          </div>
+        </button>
+      </div>
+
+      <div className="space-y-4 px-4 pb-4 pt-1">
+        <div className="space-y-3">
+          {showMessageCaption && (
+            <SpoiledWrapper hasSensitiveContent={file.hasSensitiveContent}>
+              <FileCaptionText
+                text={file.caption}
+                className="line-clamp-2 px-1 text-sm leading-5 text-foreground"
+                onTagClick={onTagClick}
               />
+            </SpoiledWrapper>
+          )}
+          <FileExtra
+            file={file}
+            rowHeight="s"
+            ellipsis={true}
+            onTagClick={onTagClick}
+          />
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{prettyBytes(file.size)}</span>
+            <span>&bull;</span>
+            <span className="capitalize">{file.type}</span>
+            {downloadSpeed > 0 && file.downloadStatus === "downloading" && (
+              <>
+                <span>&bull;</span>
+                <span>
+                  {prettyBytes(downloadSpeed, {
+                    bits: settings?.speedUnits === "bits",
+                  })}
+                  /s
+                </span>
+              </>
             )}
           </div>
+        </div>
 
-          {downloadProgress > 0 && downloadProgress !== 100 && (
-            <div className="space-y-2">
-              <Progress value={downloadProgress} className="h-2" />
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>{downloadProgress.toFixed(0)}%</span>
-                <span>{prettyBytes(file.downloadedSize)}</span>
-              </div>
-            </div>
-          )}
-
-          <div onClick={(event) => event.stopPropagation()}>
-            <FileControl
+        <div className="flex flex-wrap items-center gap-2">
+          <FileStatus file={file} className="justify-start" />
+          {file.loaded && (
+            <FileTags
+              key={`${file.messageId}-${file.uniqueId}`}
               file={file}
-              downloadSpeed={downloadSpeed}
-              hovered={true}
+              onTagsUpdate={(tags) =>
+                updateField(file.uniqueId, { tags: tags.join(",") })
+              }
             />
+          )}
+        </div>
+
+        {downloadProgress > 0 && downloadProgress !== 100 && (
+          <div className="space-y-2">
+            <Progress value={downloadProgress} className="h-2" />
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>{downloadProgress.toFixed(0)}%</span>
+              <span>{prettyBytes(file.downloadedSize)}</span>
+            </div>
           </div>
+        )}
+
+        <div onClick={(event) => event.stopPropagation()}>
+          <FileControl
+            file={file}
+            downloadSpeed={downloadSpeed}
+            hovered={true}
+          />
         </div>
       </div>
     </div>
@@ -381,4 +541,11 @@ function getPreviewAspect(file: TelegramFile) {
   }
 
   return "aspect-square";
+}
+
+function shouldShowMessageCaption(file: TelegramFile) {
+  return (
+    (file.type === "photo" || file.type === "video") &&
+    file.caption.trim() !== ""
+  );
 }

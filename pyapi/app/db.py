@@ -155,6 +155,7 @@ def _parse_extra(extra: Any) -> Any:
 def _serialize_file_row(
     row: sqlite3.Row,
     thumbnail_row: sqlite3.Row | None,
+    album_caption: str = "",
 ) -> dict[str, Any]:
     date_seconds = _safe_int(row["date"], 0)
     completion_date = row["completion_date"]
@@ -174,6 +175,7 @@ def _serialize_file_row(
         "telegramId": _safe_int(row["telegram_id"]),
         "uniqueId": str(row["unique_id"] or ""),
         "messageId": _safe_int(row["message_id"]),
+        "mediaAlbumId": _safe_int(row["media_album_id"]),
         "chatId": _safe_int(row["chat_id"]),
         "fileName": str(row["file_name"] or ""),
         "type": str(row["type"] or "file"),
@@ -189,7 +191,7 @@ def _serialize_file_row(
             if date_seconds > 0
             else ""
         ),
-        "caption": str(row["caption"] or ""),
+        "caption": str(row["caption"] or "") or album_caption,
         "localPath": str(row["local_path"] or ""),
         "hasSensitiveContent": _to_bool(row["has_sensitive_content"]),
         "startDate": _safe_int(row["start_date"]),
@@ -204,6 +206,51 @@ def _serialize_file_row(
         "hasReply": False,
         "reactionCount": _safe_int(row["reaction_count"]),
     }
+
+
+def _load_album_caption_map(
+    conn: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+    *,
+    telegram_id: int | None,
+) -> dict[tuple[int, int, int], str]:
+    album_keys = {
+        (
+            _safe_int(row["telegram_id"]),
+            _safe_int(row["chat_id"]),
+            _safe_int(row["media_album_id"]),
+        )
+        for row in rows
+        if _safe_int(row["media_album_id"]) != 0
+    }
+    if not album_keys:
+        return {}
+
+    album_ids = sorted({album_id for _, _, album_id in album_keys})
+    placeholders = ", ".join(["?"] * len(album_ids))
+    query = (
+        "SELECT telegram_id, chat_id, media_album_id, caption "
+        "FROM file_record "
+        f"WHERE media_album_id IN ({placeholders}) "
+        "AND type != 'thumbnail' "
+        "AND TRIM(COALESCE(caption, '')) != ''"
+    )
+    params: list[Any] = list(album_ids)
+    if telegram_id is not None and telegram_id != -1:
+        query += " AND telegram_id = ?"
+        params.append(telegram_id)
+
+    album_caption_map: dict[tuple[int, int, int], str] = {}
+    for caption_row in conn.execute(query, params).fetchall():
+        key = (
+            _safe_int(caption_row["telegram_id"]),
+            _safe_int(caption_row["chat_id"]),
+            _safe_int(caption_row["media_album_id"]),
+        )
+        if key not in album_keys or key in album_caption_map:
+            continue
+        album_caption_map[key] = str(caption_row["caption"] or "")
+    return album_caption_map
 
 
 def list_files(
@@ -226,7 +273,17 @@ def list_files(
 
     search = (filters.get("search") or "").strip()
     if search:
-        where_clauses.append("(file_name LIKE ? OR caption LIKE ?)")
+        where_clauses.append(
+            "(file_name LIKE ? OR caption LIKE ? OR EXISTS ("
+            "SELECT 1 FROM file_record AS album_file "
+            "WHERE album_file.telegram_id = file_record.telegram_id "
+            "AND album_file.chat_id = file_record.chat_id "
+            "AND album_file.media_album_id = file_record.media_album_id "
+            "AND album_file.media_album_id != 0 "
+            "AND album_file.type != 'thumbnail' "
+            "AND album_file.caption LIKE ?))"
+        )
+        params.append(f"%{search}%")
         params.append(f"%{search}%")
         params.append(f"%{search}%")
 
@@ -380,10 +437,24 @@ def list_files(
             ).fetchall()
         thumbnail_map = {str(t_row["unique_id"]): t_row for t_row in thumbnail_rows}
 
+    album_caption_map = _load_album_caption_map(
+        conn,
+        rows,
+        telegram_id=telegram_id,
+    )
+
     files = [
         _serialize_file_row(
             row,
             thumbnail_map.get(str(row["thumbnail_unique_id"] or "")),
+            album_caption_map.get(
+                (
+                    _safe_int(row["telegram_id"]),
+                    _safe_int(row["chat_id"]),
+                    _safe_int(row["media_album_id"]),
+                ),
+                "",
+            ),
         )
         for row in rows
     ]

@@ -32,15 +32,18 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import FileCaptionText from "@/components/file-caption-text";
 
 export default function FileInfo({
   file,
   onView,
   onFileTagsClick,
+  onTagClick,
 }: {
   file: TelegramFile;
   onView: () => void;
   onFileTagsClick: (file: TelegramFile) => void;
+  onTagClick?: (tag: string) => void;
 }) {
   const { downloadProgress } = useFileSpeed(file);
   return (
@@ -55,12 +58,9 @@ export default function FileInfo({
         </div>
         {file.caption && (
           <SpoiledWrapper hasSensitiveContent={file.hasSensitiveContent}>
-            <DrawerDescription
-              className="mx-auto mt-2 max-h-36 max-w-md overflow-y-auto text-start"
-              dangerouslySetInnerHTML={{
-                __html: file.caption.replaceAll("\n", "<br />"),
-              }}
-            ></DrawerDescription>
+            <DrawerDescription className="mx-auto mt-2 max-h-36 max-w-md overflow-y-auto text-start">
+              <FileCaptionText text={file.caption} onTagClick={onTagClick} />
+            </DrawerDescription>
           </SpoiledWrapper>
         )}
         {downloadProgress > 0 && downloadProgress !== 100 && (

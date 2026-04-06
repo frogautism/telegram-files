@@ -12,6 +12,7 @@ import DraggableElement from "@/components/ui/draggable-element";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import FileNotFount from "@/components/file-not-found";
 import { MobileFileTagsDrawer } from "@/components/file-tags";
+import { getFileGroupKey } from "@/lib/file-groups";
 
 interface FileListProps {
   accountId: string;
@@ -45,6 +46,13 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
     hasMore,
     handleLoadMore,
   } = useFilesProps;
+
+  const handleTagClick = (tag: string) => {
+    void handleFilterChange({
+      ...filters,
+      search: tag,
+    });
+  };
 
   const rowVirtual = useWindowVirtualizer({
     count: hasMore ? files.length + 1 : files.length,
@@ -176,6 +184,27 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
                 </div>
               );
             }
+
+            const groupKey = getFileGroupKey(file);
+            let groupStart = virtualRow.index;
+            let groupEnd = virtualRow.index;
+
+            while (
+              groupStart > 0 &&
+              getFileGroupKey(files[groupStart - 1]!) === groupKey
+            ) {
+              groupStart -= 1;
+            }
+
+            while (
+              groupEnd < files.length - 1 &&
+              getFileGroupKey(files[groupEnd + 1]!) === groupKey
+            ) {
+              groupEnd += 1;
+            }
+
+            const groupCount = groupEnd - groupStart + 1;
+
             return (
               <FileCard
                 key={`${file.id}-${file.uniqueId}-${virtualRow.index}`}
@@ -195,6 +224,15 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
                   setCurrentTagsFile(file);
                   setIsTagsDrawerOpen(true);
                 }}
+                onTagClick={handleTagClick}
+                groupInfo={
+                  groupCount > 1
+                    ? {
+                        count: groupCount,
+                        index: virtualRow.index - groupStart,
+                      }
+                    : undefined
+                }
                 layout={layout}
                 {...useFilesProps}
               />

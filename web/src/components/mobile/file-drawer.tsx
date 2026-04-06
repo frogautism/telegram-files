@@ -25,6 +25,8 @@ export default function FileDrawer({
   file,
   onFileChange,
   onFileTagsClick,
+  filters,
+  handleFilterChange,
   hasMore,
   handleLoadMore,
   isLoading,
@@ -107,6 +109,13 @@ export default function FileDrawer({
 
   if (!file) return null;
 
+  const handleTagClick = (tag: string) => {
+    void handleFilterChange({
+      ...filters,
+      search: tag,
+    });
+  };
+
   return (
     <Drawer
       open={open}
@@ -171,6 +180,7 @@ export default function FileDrawer({
                 onView={() => setViewing(true)}
                 file={file}
                 onFileTagsClick={onFileTagsClick}
+                onTagClick={handleTagClick}
               />
             )}
           </motion.div>

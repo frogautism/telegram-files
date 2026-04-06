@@ -20,11 +20,14 @@ import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
 import { formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
 import useIsMobile from "@/hooks/use-is-mobile";
+import FileCaptionText from "@/components/file-caption-text";
 
 interface FileExtraProps {
   file: TelegramFile;
   rowHeight: RowHeight;
   ellipsis?: boolean;
+  onTagClick?: (tag: string) => void;
+  suppressCaption?: boolean;
 }
 
 function FileName({ file, ellipsis }: FileExtraProps) {
@@ -51,7 +54,12 @@ function FileName({ file, ellipsis }: FileExtraProps) {
   );
 }
 
-function FileCaption({ file, rowHeight, ellipsis }: FileExtraProps) {
+function FileCaption({
+  file,
+  rowHeight,
+  ellipsis,
+  onTagClick,
+}: FileExtraProps) {
   if (!file.caption) {
     return null;
   }
@@ -61,7 +69,7 @@ function FileCaption({ file, rowHeight, ellipsis }: FileExtraProps) {
       className="h-5"
     >
       <Tooltip>
-        <TooltipTrigger>
+        <TooltipTrigger asChild>
           <div className="flex items-center gap-2">
             <Captions className="h-4 w-4 flex-shrink-0" />
             <p
@@ -71,17 +79,14 @@ function FileCaption({ file, rowHeight, ellipsis }: FileExtraProps) {
                 "overflow-hidden text-wrap px-1 text-start text-sm",
               )}
             >
-              {file.caption}
+              <FileCaptionText text={file.caption} onTagClick={onTagClick} />
             </p>
           </div>
         </TooltipTrigger>
         <TooltipContent>
-          <p
-            className="no-scrollbar max-h-96 max-w-80 overflow-auto text-wrap rounded p-2"
-            dangerouslySetInnerHTML={{
-              __html: file.caption.replaceAll("\n", "<br />"),
-            }}
-          ></p>
+          <div className="no-scrollbar max-h-96 max-w-80 overflow-auto text-wrap rounded p-2">
+            <FileCaptionText text={file.caption} onTagClick={onTagClick} />
+          </div>
         </TooltipContent>
       </Tooltip>
     </SpoiledWrapper>
@@ -181,7 +186,9 @@ export default function FileExtra(fileExtraProps: FileExtraProps) {
   if (rowHeight === "s") {
     const renderOrder = [
       { key: "fileName", Component: FileName },
-      { key: "caption", Component: FileCaption },
+      ...(!fileExtraProps.suppressCaption
+        ? [{ key: "caption", Component: FileCaption }]
+        : []),
       { key: "localPath", Component: FilePath },
       { key: "default", Component: FileTime },
     ];
@@ -204,7 +211,7 @@ export default function FileExtra(fileExtraProps: FileExtraProps) {
     <div className="relative flex flex-col space-y-1 overflow-hidden">
       <TooltipProvider>
         <FileName {...fileExtraProps} />
-        <FileCaption {...fileExtraProps} />
+        {!fileExtraProps.suppressCaption && <FileCaption {...fileExtraProps} />}
         <FilePath {...fileExtraProps} />
         <FileTime {...fileExtraProps} />
       </TooltipProvider>

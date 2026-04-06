@@ -388,6 +388,7 @@ def parse_link_files(
         )
         if file_payload is not None
     ]
+    converted_files = _apply_media_album_captions(converted_files)
 
     return {
         "files": converted_files,
@@ -451,6 +452,38 @@ def _matches_td_file_filters(
     return True
 
 
+def _apply_media_album_captions(
+    files: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    album_captions: dict[tuple[int, int], str] = {}
+    for file_payload in files:
+        media_album_id = _int_or_default(file_payload.get("mediaAlbumId"), 0)
+        chat_id = _int_or_default(file_payload.get("chatId"), 0)
+        caption = str(file_payload.get("caption") or "")
+        if media_album_id == 0 or chat_id == 0 or not caption.strip():
+            continue
+        album_captions[(chat_id, media_album_id)] = caption
+
+    if not album_captions:
+        return files
+
+    normalized_files: list[dict[str, Any]] = []
+    for file_payload in files:
+        media_album_id = _int_or_default(file_payload.get("mediaAlbumId"), 0)
+        chat_id = _int_or_default(file_payload.get("chatId"), 0)
+        if (
+            media_album_id != 0
+            and chat_id != 0
+            and not str(file_payload.get("caption") or "").strip()
+        ):
+            album_caption = album_captions.get((chat_id, media_album_id), "")
+            if album_caption:
+                normalized_files.append({**file_payload, "caption": album_caption})
+                continue
+        normalized_files.append(file_payload)
+    return normalized_files
+
+
 def load_tdlib_chat_files(
     td_manager: TdlibAuthManager,
     *,
@@ -504,6 +537,7 @@ def load_tdlib_chat_files(
             break
 
         batch_last_message_id = 0
+        batch_files: list[dict[str, Any]] = []
         for message in history_messages:
             if not isinstance(message, dict):
                 continue
@@ -517,6 +551,11 @@ def load_tdlib_chat_files(
             file_payload = td_message_to_file(telegram_id, message)
             if file_payload is None:
                 continue
+
+            batch_files.append(file_payload)
+
+        batch_files = _apply_media_album_captions(batch_files)
+        for file_payload in batch_files:
             if not _matches_td_file_filters(file_payload, filters):
                 continue
 

@@ -11,6 +11,8 @@ import FileImage from "../file-image";
 import { MobileFileTags } from "@/components/file-tags";
 import { TooltipWrapper } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
+import SpoiledWrapper from "@/components/spoiled-wrapper";
+import FileCaptionText from "@/components/file-caption-text";
 
 type FileCardProps = {
   index: number;
@@ -20,6 +22,11 @@ type FileCardProps = {
   file: TelegramFile;
   onFileClick: () => void;
   onFileTagsClick?: () => void;
+  onTagClick?: (tag: string) => void;
+  groupInfo?: {
+    count: number;
+    index: number;
+  };
   layout: "detailed" | "gallery";
 };
 
@@ -31,10 +38,14 @@ export function FileCard({
   file,
   onFileClick,
   onFileTagsClick,
+  onTagClick,
+  groupInfo,
   layout,
 }: FileCardProps) {
   const { downloadProgress } = useFileSpeed(file);
   const isGalleryLayout = layout === "gallery";
+  const showMessageCaption =
+    shouldShowMessageCaption(file) && (!groupInfo || groupInfo.index === 0);
 
   return (
     <Card
@@ -70,6 +81,15 @@ export function FileCard({
             </TooltipWrapper>
           )}
 
+          {groupInfo && groupInfo.count > 1 && (
+            <Badge
+              variant="secondary"
+              className="absolute left-4 top-4 z-10 rounded-full px-2 py-1 text-[11px]"
+            >
+              {groupInfo.index + 1}/{groupInfo.count} same message
+            </Badge>
+          )}
+
           <div
             className={cn(
               "overflow-hidden rounded-[24px] border-[8px] border-white bg-muted",
@@ -87,12 +107,30 @@ export function FileCard({
 
           {isGalleryLayout ? (
             <div className="w-full space-y-3 px-1 pb-1">
-              <FileExtra file={file} rowHeight="s" ellipsis={true} />
+              {showMessageCaption && (
+                <SpoiledWrapper hasSensitiveContent={file.hasSensitiveContent}>
+                  <FileCaptionText
+                    text={file.caption}
+                    className="line-clamp-2 text-sm leading-5 text-foreground"
+                    onTagClick={onTagClick}
+                  />
+                </SpoiledWrapper>
+              )}
+              <FileExtra
+                file={file}
+                rowHeight="s"
+                ellipsis={true}
+                onTagClick={onTagClick}
+                suppressCaption={Boolean(groupInfo && groupInfo.index > 0)}
+              />
               <div className="flex items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <FileStatus file={file} className="justify-start" />
                   {file.loaded && (
-                    <MobileFileTags tags={file.tags} onClick={onFileTagsClick} />
+                    <MobileFileTags
+                      tags={file.tags}
+                      onClick={onFileTagsClick}
+                    />
                   )}
                 </div>
                 <span className="text-xs text-muted-foreground">
@@ -102,7 +140,22 @@ export function FileCard({
             </div>
           ) : (
             <div className="flex-1 overflow-hidden">
-              <FileExtra file={file} rowHeight="s" ellipsis={true} />
+              {showMessageCaption && (
+                <SpoiledWrapper hasSensitiveContent={file.hasSensitiveContent}>
+                  <FileCaptionText
+                    text={file.caption}
+                    className="mb-2 line-clamp-2 text-sm leading-5 text-foreground"
+                    onTagClick={onTagClick}
+                  />
+                </SpoiledWrapper>
+              )}
+              <FileExtra
+                file={file}
+                rowHeight="s"
+                ellipsis={true}
+                onTagClick={onTagClick}
+                suppressCaption={Boolean(groupInfo && groupInfo.index > 0)}
+              />
               <div className="flex items-center justify-between">
                 <div className="flex flex-col justify-start gap-0.5">
                   <span className="text-xs text-muted-foreground">
@@ -131,5 +184,12 @@ export function FileCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function shouldShowMessageCaption(file: TelegramFile) {
+  return (
+    (file.type === "photo" || file.type === "video") &&
+    file.caption.trim() !== ""
   );
 }

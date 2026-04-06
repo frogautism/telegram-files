@@ -17,6 +17,8 @@ import FileExtra from "@/components/file-extra";
 import { Button } from "@/components/ui/button";
 import useFileSwitch from "@/hooks/use-file-switch";
 import FileImage from "./file-image";
+import SpoiledWrapper from "@/components/spoiled-wrapper";
+import FileCaptionText from "@/components/file-caption-text";
 
 type FileViewerProps = {
   open: boolean;
@@ -30,6 +32,8 @@ export default function FileViewer({
   onOpenChange,
   onFileChange,
   file,
+  filters,
+  handleFilterChange,
   hasMore,
   handleLoadMore,
   isLoading,
@@ -75,13 +79,38 @@ export default function FileViewer({
 
   if (!file) return null;
 
+  const showMessageCaption = shouldShowMessageCaption(file);
+  const handleTagClick = (tag: string) => {
+    void handleFilterChange({
+      ...filters,
+      search: tag,
+    });
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPortal>
         <DialogOverlay>
           <>
-            <div className="absolute left-0 top-0 z-[100] flex h-16 w-full items-center border-gray-700 px-4 text-white backdrop-blur">
-              <FileExtra file={file} rowHeight="s" />
+            <div className="absolute left-0 top-0 z-[100] flex min-h-16 w-full items-start border-gray-700 px-4 py-3 text-white backdrop-blur">
+              <div className="min-w-0 max-w-[calc(100vw-7rem)] space-y-1">
+                {showMessageCaption && (
+                  <SpoiledWrapper
+                    hasSensitiveContent={file.hasSensitiveContent}
+                  >
+                    <FileCaptionText
+                      text={file.caption}
+                      className="line-clamp-2 px-1 text-sm font-medium leading-5 text-white"
+                      onTagClick={handleTagClick}
+                    />
+                  </SpoiledWrapper>
+                )}
+                <FileExtra
+                  file={file}
+                  rowHeight="s"
+                  onTagClick={handleTagClick}
+                />
+              </div>
               <Button
                 variant="ghost"
                 size="icon"
@@ -174,5 +203,12 @@ export default function FileViewer({
         </DialogPrimitive.Content>
       </DialogPortal>
     </Dialog>
+  );
+}
+
+function shouldShowMessageCaption(file: TelegramFile) {
+  return (
+    (file.type === "photo" || file.type === "video") &&
+    file.caption.trim() !== ""
   );
 }
