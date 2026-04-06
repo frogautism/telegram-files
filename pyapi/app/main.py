@@ -3,14 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import mimetypes
 import secrets
 import sqlite3
 import os
 import time
 from copy import deepcopy
 from collections import deque
-from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -32,7 +30,18 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
+from .automation_workers import (
+    WorkerDeps,
+    background_workers_loop as _background_workers_loop,
+    queue_transfer_candidate as _queue_transfer_candidate,
+    reset_worker_state as _reset_worker_state,
+)
 from .config import AppConfig
+from .file_record_ops import (
+    file_for_transfer as _db_file_for_transfer,
+    update_tdlib_file_status as _update_tdlib_file_status,
+    upsert_tdlib_file_record as _db_upsert_tdlib_file_record,
+)
 from .db import (
     count_files_by_type,
     cancel_file_download,
@@ -54,13 +63,11 @@ from .db import (
     remove_file_download,
     start_file_download,
     toggle_pause_file_download,
-    update_auto_settings,
     update_file_tags,
     update_files_tags,
     update_telegram_proxy,
     upsert_settings,
 )
-from .filter_expr import evaluate_filter_expr as _evaluate_filter_expr
 from .settings_keys import default_value_for
 from .tdlib import (
     TdlibAuthManager,
@@ -82,11 +89,23 @@ from .tdlib_queries import (
     parse_link_files as _parse_link_files,
     tdlib_test_network as _tdlib_test_network,
 )
-from .tdlib_file_mapper import (
-    extract_td_message_file as _extract_td_message_file,
-    td_message_to_file as _td_message_to_file,
+from .tdlib_downloads import (
+    cached_tdlib_file_preview as _cached_tdlib_file_preview,
+    enrich_tdlib_thumbnails_for_files as _enrich_tdlib_thumbnails_for_files,
+    media_type_for_path as _media_type_for_path,
+    resolve_tdlib_preview_info as _resolve_tdlib_preview_info,
+    start_tdlib_download_for_message as _start_tdlib_download_for_message,
+    tdlib_cancel_download_fallback as _tdlib_cancel_download_fallback,
+    tdlib_remove_file_fallback as _tdlib_remove_file_fallback,
+    tdlib_toggle_pause_download_fallback as _tdlib_toggle_pause_download_fallback,
 )
-from .transfer_ops import execute_transfer as _execute_transfer
+from .tdlib_monitor import (
+    TdlibMonitorDeps,
+    emit_tdlib_download_aggregate as _emit_tdlib_download_aggregate_impl,
+    ensure_tdlib_download_monitor as _ensure_tdlib_download_monitor_impl,
+    reset_tdlib_monitor_state as _reset_tdlib_monitor_state,
+    stop_tdlib_download_monitor as _stop_tdlib_download_monitor_impl,
+)
 
 
 SESSION_COOKIE_NAME = "tf"
@@ -98,18 +117,6 @@ EVENT_TYPE_FILE_UPDATE = 3
 EVENT_TYPE_FILE_DOWNLOAD = 4
 EVENT_TYPE_FILE_STATUS = 5
 
-AUTO_DOWNLOAD_DEFAULT_LIMIT = 5
-HISTORY_PRELOAD_STATE = 1
-HISTORY_DOWNLOAD_STATE = 2
-HISTORY_DOWNLOAD_SCAN_STATE = 3
-HISTORY_TRANSFER_STATE = 4
-
-PRELOAD_SCAN_INTERVAL_SECONDS = 30
-AUTO_DOWNLOAD_SCAN_INTERVAL_SECONDS = 120
-AUTO_DOWNLOAD_TICK_INTERVAL_SECONDS = 10
-TRANSFER_SCAN_INTERVAL_SECONDS = 120
-TRANSFER_TICK_INTERVAL_SECONDS = 3
-AUTO_DOWNLOAD_MAX_WAITING_LENGTH = 30
 SPEED_INTERVAL_CACHE_TTL_SECONDS = 5.0
 
 TELEGRAM_CONSTRUCTOR_STATE_READY = -1834871737
@@ -174,14 +181,6 @@ STATE_LOCK = Lock()
 PENDING_TELEGRAMS: dict[str, PendingTelegramAccount] = {}
 SESSION_TELEGRAM_SELECTION: dict[str, str] = {}
 WS_CONNECTIONS: dict[str, set[WebSocket]] = {}
-TDLIB_DOWNLOAD_TASKS: dict[tuple[str, int, int], asyncio.Task[Any]] = {}
-TDLIB_DOWNLOAD_PROGRESS: dict[tuple[str, int, int], dict[str, Any]] = {}
-TDLIB_FILE_PREVIEW_CACHE: dict[tuple[int, str], dict[str, Any]] = {}
-AUTO_DOWNLOAD_WAITING: dict[int, deque[dict[str, int]]] = {}
-AUTO_DOWNLOAD_WAITING_KEYS: set[tuple[int, int, int]] = set()
-AUTO_DOWNLOAD_COMMENT_THREADS: dict[tuple[int, int, int], dict[str, Any]] = {}
-TRANSFER_WAITING: deque[dict[str, Any]] = deque()
-TRANSFER_WAITING_KEYS: set[tuple[int, str]] = set()
 SPEED_TRACKERS: dict[int, "AvgSpeedTracker"] = {}
 SPEED_TOTAL_DOWNLOADED: dict[int, int] = {}
 SPEED_LAST_FILE_DOWNLOADED: dict[tuple[int, int], int] = {}
@@ -357,18 +356,43 @@ async def lifespan(app: FastAPI):
     app.state.db = conn
     app.state.tdlib_manager = tdlib_manager
     app.state.tdlib_error = tdlib_error
-    AUTO_DOWNLOAD_WAITING.clear()
-    AUTO_DOWNLOAD_WAITING_KEYS.clear()
-    AUTO_DOWNLOAD_COMMENT_THREADS.clear()
-    TRANSFER_WAITING.clear()
-    TRANSFER_WAITING_KEYS.clear()
+    _reset_worker_state()
+    _reset_tdlib_monitor_state()
     SPEED_TRACKERS.clear()
     SPEED_TOTAL_DOWNLOADED.clear()
     SPEED_LAST_FILE_DOWNLOADED.clear()
     global SPEED_INTERVAL_CACHE_VALUE, SPEED_INTERVAL_CACHE_AT
     SPEED_INTERVAL_CACHE_VALUE = 5 * 60
     SPEED_INTERVAL_CACHE_AT = 0.0
-    worker_task = asyncio.create_task(_background_workers_loop(app))
+
+    async def _emit_worker_file_status(payload: dict[str, Any]) -> None:
+        await _emit_ws_payload(
+            _build_ws_payload(EVENT_TYPE_FILE_STATUS, payload),
+        )
+
+    worker_task = asyncio.create_task(
+        _background_workers_loop(
+            app,
+            WorkerDeps(
+                tdlib_account_root_path=_tdlib_account_root_path,
+                emit_file_status=_emit_worker_file_status,
+                td_file_status_payload=_td_file_status_payload,
+                ensure_tdlib_download_monitor=lambda worker_app,
+                session_id,
+                telegram_id,
+                file_id,
+                unique_id: _ensure_tdlib_download_monitor(
+                    worker_app,
+                    session_id=session_id,
+                    telegram_id=telegram_id,
+                    file_id=file_id,
+                    unique_id=unique_id,
+                ),
+                avg_speed_interval=_avg_speed_interval,
+                persist_speed_statistics=_persist_speed_statistics,
+            ),
+        )
+    )
     app.state.background_workers = worker_task
     try:
         yield
@@ -519,22 +543,6 @@ def _decode_link_value(value: str) -> str:
     return current
 
 
-def _state_is_enabled(state: int, bit: int) -> bool:
-    return (state & (1 << bit)) != 0
-
-
-def _state_enable(state: int, bit: int) -> int:
-    return state | (1 << bit)
-
-
-def _auto_download_limit(db: sqlite3.Connection) -> int:
-    raw = get_settings_by_keys(db, ["autoDownloadLimit"]).get("autoDownloadLimit")
-    parsed = _int_or_default(raw, AUTO_DOWNLOAD_DEFAULT_LIMIT)
-    if parsed <= 0:
-        return AUTO_DOWNLOAD_DEFAULT_LIMIT
-    return parsed
-
-
 def _avg_speed_interval(db: sqlite3.Connection) -> int:
     global SPEED_INTERVAL_CACHE_VALUE, SPEED_INTERVAL_CACHE_AT
 
@@ -681,444 +689,6 @@ def _persist_speed_statistics(db: sqlite3.Connection) -> None:
     db.commit()
 
 
-def _is_download_time(db: sqlite3.Connection) -> bool:
-    raw = get_settings_by_keys(db, ["autoDownloadTimeLimited"]).get(
-        "autoDownloadTimeLimited"
-    )
-    text = str(raw or "").strip()
-    if not text:
-        return True
-
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return True
-
-    if not isinstance(parsed, dict):
-        return True
-
-    start_text = str(parsed.get("startTime") or "").strip()
-    end_text = str(parsed.get("endTime") or "").strip()
-    if not start_text or not end_text:
-        return True
-
-    try:
-        start_time = datetime.strptime(start_text, "%H:%M").time()
-        end_time = datetime.strptime(end_text, "%H:%M").time()
-    except ValueError:
-        return True
-
-    if start_time.hour == 0 and start_time.minute == 0:
-        if end_time.hour == 0 and end_time.minute == 0:
-            return True
-
-    now = datetime.now().time()
-    if start_time > end_time:
-        return now > start_time or now < end_time
-    return now > start_time and now < end_time
-
-
-def _persist_automation(
-    db: sqlite3.Connection,
-    *,
-    telegram_id: int,
-    chat_id: int,
-    automation: dict[str, Any],
-) -> None:
-    update_auto_settings(
-        db,
-        telegram_id=telegram_id,
-        chat_id=chat_id,
-        auto_payload=deepcopy(automation),
-    )
-
-
-def _db_find_file_by_unique(
-    db: sqlite3.Connection,
-    *,
-    telegram_id: int,
-    unique_id: str,
-) -> sqlite3.Row | None:
-    return db.execute(
-        """
-        SELECT *
-        FROM file_record
-        WHERE telegram_id = ? AND unique_id = ?
-        ORDER BY message_id DESC
-        LIMIT 1
-        """,
-        (telegram_id, unique_id),
-    ).fetchone()
-
-
-def _db_upsert_tdlib_thumbnail_record(
-    db: sqlite3.Connection,
-    *,
-    telegram_id: int,
-    chat_id: int,
-    message_id: int,
-    date: int,
-    thumbnail_payload: dict[str, Any],
-) -> str:
-    unique_id = str(thumbnail_payload.get("uniqueId") or "").strip()
-    if not unique_id:
-        return ""
-
-    file_id = _int_or_default(thumbnail_payload.get("id"), 0)
-    mime_type = str(thumbnail_payload.get("mimeType") or "image/jpeg")
-    size = _int_or_default(thumbnail_payload.get("size"), 0)
-    downloaded_size = _int_or_default(thumbnail_payload.get("downloadedSize"), 0)
-    local_path = str(thumbnail_payload.get("localPath") or "").strip()
-    download_status = str(thumbnail_payload.get("downloadStatus") or "idle")
-    if local_path:
-        download_status = "completed"
-
-    completion_date = int(time.time() * 1000) if download_status == "completed" else 0
-    completion_value: int | None = completion_date if completion_date > 0 else None
-
-    extra_payload = thumbnail_payload.get("extra")
-    extra_json = (
-        json.dumps(extra_payload, separators=(",", ":"), ensure_ascii=False)
-        if extra_payload is not None
-        else None
-    )
-
-    existing = _db_find_file_by_unique(
-        db,
-        telegram_id=telegram_id,
-        unique_id=unique_id,
-    )
-    if existing is not None:
-        existing_status = str(existing["download_status"] or "idle")
-        if existing_status == "completed" and download_status != "completed":
-            download_status = existing_status
-            local_path = str(existing["local_path"] or local_path)
-            completion_value = _int_or_default(existing["completion_date"], 0) or None
-        if not local_path and str(existing["local_path"] or ""):
-            local_path = str(existing["local_path"] or "")
-            download_status = "completed"
-            completion_value = _int_or_default(existing["completion_date"], 0) or None
-
-    if existing is None:
-        db.execute(
-            """
-            INSERT INTO file_record(
-                id, unique_id, telegram_id, chat_id, message_id, media_album_id,
-                date, has_sensitive_content, size, downloaded_size, type, mime_type,
-                file_name, thumbnail, thumbnail_unique_id, caption, extra, local_path,
-                download_status, transfer_status, start_date, completion_date, tags,
-                thread_chat_id, message_thread_id, reaction_count
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                file_id,
-                unique_id,
-                telegram_id,
-                chat_id,
-                message_id,
-                0,
-                date,
-                0,
-                size,
-                downloaded_size,
-                "thumbnail",
-                mime_type,
-                f"thumbnail_{message_id}_{file_id}",
-                "",
-                None,
-                "",
-                extra_json,
-                local_path,
-                download_status,
-                "idle",
-                0,
-                completion_value,
-                None,
-                0,
-                0,
-                0,
-            ),
-        )
-    else:
-        db.execute(
-            """
-            UPDATE file_record
-            SET id = ?,
-                chat_id = ?,
-                message_id = ?,
-                date = ?,
-                size = ?,
-                downloaded_size = ?,
-                type = 'thumbnail',
-                mime_type = ?,
-                file_name = ?,
-                extra = ?,
-                local_path = ?,
-                download_status = ?,
-                transfer_status = 'idle',
-                completion_date = ?
-            WHERE telegram_id = ? AND unique_id = ?
-            """,
-            (
-                file_id,
-                chat_id,
-                message_id,
-                date,
-                size,
-                downloaded_size,
-                mime_type,
-                f"thumbnail_{message_id}_{file_id}",
-                extra_json,
-                local_path,
-                download_status,
-                completion_value,
-                telegram_id,
-                unique_id,
-            ),
-        )
-
-    return unique_id
-
-
-def _db_upsert_tdlib_file_record(
-    db: sqlite3.Connection,
-    *,
-    file_payload: dict[str, Any],
-) -> None:
-    telegram_id = _int_or_default(file_payload.get("telegramId"), 0)
-    unique_id = str(file_payload.get("uniqueId") or "").strip()
-    if telegram_id <= 0 or not unique_id:
-        return
-
-    existing = _db_find_file_by_unique(
-        db,
-        telegram_id=telegram_id,
-        unique_id=unique_id,
-    )
-
-    extra_payload = file_payload.get("extra")
-    extra_json = (
-        json.dumps(extra_payload, separators=(",", ":"), ensure_ascii=False)
-        if extra_payload is not None
-        else None
-    )
-
-    completion_date = _int_or_default(file_payload.get("completionDate"), 0)
-    completion_value: int | None = completion_date if completion_date > 0 else None
-    download_status = str(file_payload.get("downloadStatus") or "idle")
-    transfer_status = str(file_payload.get("transferStatus") or "idle")
-    thumbnail_payload = (
-        file_payload.get("thumbnailFile")
-        if isinstance(file_payload.get("thumbnailFile"), dict)
-        else None
-    )
-    thumbnail_unique_id = (
-        str(thumbnail_payload.get("uniqueId") or "").strip()
-        if thumbnail_payload is not None
-        else ""
-    )
-
-    payload_values = {
-        "id": _int_or_default(file_payload.get("id"), 0),
-        "chat_id": _int_or_default(file_payload.get("chatId"), 0),
-        "message_id": _int_or_default(file_payload.get("messageId"), 0),
-        "media_album_id": _int_or_default(file_payload.get("mediaAlbumId"), 0),
-        "date": _int_or_default(file_payload.get("date"), 0),
-        "has_sensitive_content": 1
-        if bool(file_payload.get("hasSensitiveContent"))
-        else 0,
-        "size": _int_or_default(file_payload.get("size"), 0),
-        "downloaded_size": _int_or_default(file_payload.get("downloadedSize"), 0),
-        "type": str(file_payload.get("type") or "file"),
-        "mime_type": str(file_payload.get("mimeType") or "application/octet-stream"),
-        "file_name": str(file_payload.get("fileName") or unique_id),
-        "thumbnail": str(file_payload.get("thumbnail") or ""),
-        "thumbnail_unique_id": thumbnail_unique_id or None,
-        "caption": str(file_payload.get("caption") or ""),
-        "extra": extra_json,
-        "local_path": str(file_payload.get("localPath") or ""),
-        "download_status": download_status,
-        "transfer_status": transfer_status,
-        "start_date": _int_or_default(file_payload.get("startDate"), 0),
-        "completion_date": completion_value,
-        "thread_chat_id": _int_or_default(file_payload.get("threadChatId"), 0),
-        "message_thread_id": _int_or_default(file_payload.get("messageThreadId"), 0),
-        "reaction_count": _int_or_default(file_payload.get("reactionCount"), 0),
-    }
-
-    if existing is not None:
-        existing_download_status = str(existing["download_status"] or "idle")
-        existing_transfer_status = str(existing["transfer_status"] or "idle")
-
-        incoming_download_status = payload_values["download_status"]
-        if (
-            existing_download_status == "completed"
-            and incoming_download_status != "completed"
-        ):
-            payload_values["download_status"] = existing_download_status
-        elif (
-            existing_download_status in {"downloading", "paused", "error"}
-            and incoming_download_status == "idle"
-        ):
-            payload_values["download_status"] = existing_download_status
-
-        incoming_transfer_status = payload_values["transfer_status"]
-        if (
-            existing_transfer_status in {"transferring", "completed", "error"}
-            and incoming_transfer_status == "idle"
-        ):
-            payload_values["transfer_status"] = existing_transfer_status
-
-        if not payload_values["local_path"] and str(existing["local_path"] or ""):
-            payload_values["local_path"] = str(existing["local_path"] or "")
-        if (
-            payload_values["completion_date"] is None
-            and existing["completion_date"] is not None
-        ):
-            payload_values["completion_date"] = _int_or_default(
-                existing["completion_date"], 0
-            )
-        if (
-            not payload_values["thumbnail_unique_id"]
-            and str(existing["thumbnail_unique_id"] or "").strip()
-        ):
-            payload_values["thumbnail_unique_id"] = str(existing["thumbnail_unique_id"])
-        if payload_values["thread_chat_id"] == 0:
-            payload_values["thread_chat_id"] = _int_or_default(
-                existing["thread_chat_id"],
-                0,
-            )
-        if payload_values["message_thread_id"] == 0:
-            payload_values["message_thread_id"] = _int_or_default(
-                existing["message_thread_id"],
-                0,
-            )
-
-    if existing is None:
-        db.execute(
-            """
-            INSERT INTO file_record(
-                id, unique_id, telegram_id, chat_id, message_id, media_album_id,
-                date, has_sensitive_content, size, downloaded_size, type, mime_type,
-                file_name, thumbnail, thumbnail_unique_id, caption, extra, local_path,
-                download_status, transfer_status, start_date, completion_date, tags,
-                thread_chat_id, message_thread_id, reaction_count
-            )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload_values["id"],
-                unique_id,
-                telegram_id,
-                payload_values["chat_id"],
-                payload_values["message_id"],
-                payload_values["media_album_id"],
-                payload_values["date"],
-                payload_values["has_sensitive_content"],
-                payload_values["size"],
-                payload_values["downloaded_size"],
-                payload_values["type"],
-                payload_values["mime_type"],
-                payload_values["file_name"],
-                payload_values["thumbnail"],
-                payload_values["thumbnail_unique_id"],
-                payload_values["caption"],
-                payload_values["extra"],
-                payload_values["local_path"],
-                payload_values["download_status"],
-                payload_values["transfer_status"],
-                payload_values["start_date"],
-                payload_values["completion_date"],
-                None,
-                payload_values["thread_chat_id"],
-                payload_values["message_thread_id"],
-                payload_values["reaction_count"],
-            ),
-        )
-    else:
-        db.execute(
-            """
-            UPDATE file_record
-            SET id = ?,
-                chat_id = ?,
-                message_id = ?,
-                media_album_id = ?,
-                date = ?,
-                has_sensitive_content = ?,
-                size = ?,
-                downloaded_size = ?,
-                type = ?,
-                mime_type = ?,
-                file_name = ?,
-                thumbnail = ?,
-                thumbnail_unique_id = ?,
-                caption = ?,
-                extra = ?,
-                local_path = ?,
-                download_status = ?,
-                transfer_status = ?,
-                start_date = ?,
-                completion_date = ?,
-                thread_chat_id = ?,
-                message_thread_id = ?,
-                reaction_count = ?
-            WHERE telegram_id = ? AND unique_id = ?
-            """,
-            (
-                payload_values["id"],
-                payload_values["chat_id"],
-                payload_values["message_id"],
-                payload_values["media_album_id"],
-                payload_values["date"],
-                payload_values["has_sensitive_content"],
-                payload_values["size"],
-                payload_values["downloaded_size"],
-                payload_values["type"],
-                payload_values["mime_type"],
-                payload_values["file_name"],
-                payload_values["thumbnail"],
-                payload_values["thumbnail_unique_id"],
-                payload_values["caption"],
-                payload_values["extra"],
-                payload_values["local_path"],
-                payload_values["download_status"],
-                payload_values["transfer_status"],
-                payload_values["start_date"],
-                payload_values["completion_date"],
-                payload_values["thread_chat_id"],
-                payload_values["message_thread_id"],
-                payload_values["reaction_count"],
-                telegram_id,
-                unique_id,
-            ),
-        )
-
-    if thumbnail_payload is not None:
-        linked_unique_id = _db_upsert_tdlib_thumbnail_record(
-            db,
-            telegram_id=telegram_id,
-            chat_id=payload_values["chat_id"],
-            message_id=payload_values["message_id"],
-            date=payload_values["date"],
-            thumbnail_payload=thumbnail_payload,
-        )
-        if (
-            linked_unique_id
-            and payload_values["thumbnail_unique_id"] != linked_unique_id
-        ):
-            db.execute(
-                """
-                UPDATE file_record
-                SET thumbnail_unique_id = ?
-                WHERE telegram_id = ? AND unique_id = ?
-                """,
-                (linked_unique_id, telegram_id, unique_id),
-            )
-
-    db.commit()
-
-
 def _db_update_tdlib_file_status(
     db: sqlite3.Connection,
     *,
@@ -1127,130 +697,20 @@ def _db_update_tdlib_file_status(
     unique_id: str,
     status_payload: dict[str, Any],
 ) -> None:
-    target = None
-    normalized_unique = unique_id.strip()
-    if normalized_unique:
-        target = _db_find_file_by_unique(
-            db,
-            telegram_id=telegram_id,
-            unique_id=normalized_unique,
-        )
-
-    if target is None and file_id > 0:
-        target = db.execute(
-            """
-            SELECT *
-            FROM file_record
-            WHERE telegram_id = ? AND id = ?
-            ORDER BY message_id DESC
-            LIMIT 1
-            """,
-            (telegram_id, file_id),
-        ).fetchone()
-
-    if target is None:
-        return
-
-    resolved_unique = str(target["unique_id"] or normalized_unique)
-    download_status = str(
-        status_payload.get("downloadStatus") or target["download_status"]
-    )
-    local_path = str(status_payload.get("localPath") or "")
-    completion_date = _int_or_default(status_payload.get("completionDate"), 0)
-    completion_value: int | None = completion_date if completion_date > 0 else None
-
-    db.execute(
-        """
-        UPDATE file_record
-        SET downloaded_size = ?,
-            download_status = ?,
-            local_path = ?,
-            completion_date = ?
-        WHERE telegram_id = ? AND unique_id = ?
-        """,
-        (
-            _int_or_default(status_payload.get("downloadedSize"), 0),
-            download_status,
-            local_path,
-            completion_value,
-            telegram_id,
-            resolved_unique,
+    _update_tdlib_file_status(
+        db,
+        telegram_id=telegram_id,
+        file_id=file_id,
+        unique_id=unique_id,
+        status_payload=status_payload,
+        on_completed=lambda db_conn,
+        completed_telegram_id,
+        completed_unique_id: _queue_transfer_for_completed_file(
+            db_conn,
+            telegram_id=completed_telegram_id,
+            unique_id=completed_unique_id,
         ),
     )
-    db.commit()
-
-    if download_status.strip().lower() == "completed" and local_path.strip():
-        _queue_transfer_for_completed_file(
-            db,
-            telegram_id=telegram_id,
-            unique_id=resolved_unique,
-        )
-
-
-def _db_count_downloading_files(db: sqlite3.Connection, telegram_id: int) -> int:
-    row = db.execute(
-        """
-        SELECT COUNT(*) AS count
-        FROM file_record
-        WHERE telegram_id = ?
-          AND type != 'thumbnail'
-          AND download_status = 'downloading'
-        """,
-        (telegram_id,),
-    ).fetchone()
-    return _int_or_default(row["count"] if row else 0, 0)
-
-
-def _db_transfer_candidates(
-    db: sqlite3.Connection,
-    *,
-    telegram_id: int,
-    chat_id: int,
-    limit: int = 200,
-) -> list[dict[str, Any]]:
-    rows = db.execute(
-        """
-        SELECT id, unique_id, telegram_id, chat_id
-        FROM file_record
-        WHERE telegram_id = ?
-          AND chat_id = ?
-          AND type != 'thumbnail'
-          AND download_status = 'completed'
-          AND transfer_status = 'idle'
-          AND local_path IS NOT NULL
-          AND TRIM(local_path) != ''
-        ORDER BY completion_date DESC, message_id DESC
-        LIMIT ?
-        """,
-        (telegram_id, chat_id, limit),
-    ).fetchall()
-    return [
-        {
-            "id": _int_or_default(row["id"], 0),
-            "uniqueId": str(row["unique_id"] or ""),
-            "telegramId": _int_or_default(row["telegram_id"], 0),
-            "chatId": _int_or_default(row["chat_id"], 0),
-        }
-        for row in rows
-    ]
-
-
-def _db_file_for_transfer(
-    db: sqlite3.Connection,
-    *,
-    telegram_id: int,
-    unique_id: str,
-) -> sqlite3.Row | None:
-    return db.execute(
-        """
-        SELECT *
-        FROM file_record
-        WHERE telegram_id = ? AND unique_id = ?
-        ORDER BY message_id DESC
-        LIMIT 1
-        """,
-        (telegram_id, unique_id),
-    ).fetchone()
 
 
 def _queue_transfer_for_completed_file(
@@ -1304,916 +764,6 @@ def _queue_transfer_for_completed_file(
     )
 
 
-def _db_update_transfer_status(
-    db: sqlite3.Connection,
-    *,
-    telegram_id: int,
-    unique_id: str,
-    transfer_status: str,
-    local_path: str | None = None,
-) -> dict[str, Any] | None:
-    row = _db_file_for_transfer(
-        db,
-        telegram_id=telegram_id,
-        unique_id=unique_id,
-    )
-    if row is None:
-        return None
-
-    next_local_path = str(row["local_path"] or "") if local_path is None else local_path
-    db.execute(
-        """
-        UPDATE file_record
-        SET transfer_status = ?,
-            local_path = ?
-        WHERE telegram_id = ? AND unique_id = ?
-        """,
-        (transfer_status, next_local_path, telegram_id, unique_id),
-    )
-    db.commit()
-
-    return {
-        "fileId": _int_or_default(row["id"], 0),
-        "uniqueId": unique_id,
-        "transferStatus": transfer_status,
-        "localPath": next_local_path,
-    }
-
-
-def _normalized_download_file_types(rule: dict[str, Any]) -> list[str]:
-    file_types_raw = rule.get("fileTypes") if isinstance(rule, dict) else None
-    default_order = ["photo", "video", "audio", "file"]
-    if not isinstance(file_types_raw, list) or not file_types_raw:
-        return default_order
-
-    normalized: list[str] = []
-    for item in file_types_raw:
-        current = str(item or "").strip().lower()
-        if current in {"photo", "video", "audio", "file", "media"}:
-            if current not in normalized:
-                normalized.append(current)
-    return normalized or default_order
-
-
-def _search_filter_type(file_type: str) -> str | None:
-    mapping = {
-        "media": "searchMessagesFilterPhotoAndVideo",
-        "photo": "searchMessagesFilterPhoto",
-        "video": "searchMessagesFilterVideo",
-        "audio": "searchMessagesFilterAudio",
-        "file": "searchMessagesFilterDocument",
-    }
-    return mapping.get(str(file_type or "").strip().lower())
-
-
-def _match_download_rule(
-    file_payload: dict[str, Any],
-    *,
-    automation: dict[str, Any],
-    message: dict[str, Any] | None = None,
-    skip_query_and_types: bool = False,
-) -> bool:
-    rule = automation.get("download", {}).get("rule", {})
-    if not isinstance(rule, dict):
-        rule = {}
-
-    status = str(file_payload.get("downloadStatus") or "").strip().lower()
-    if status in {"downloading", "completed"}:
-        return False
-
-    if not skip_query_and_types:
-        query = str(rule.get("query") or "").strip().lower()
-        if query:
-            file_name = str(file_payload.get("fileName") or "").lower()
-            caption = str(file_payload.get("caption") or "").lower()
-            if query not in file_name and query not in caption:
-                return False
-
-        file_types = _normalized_download_file_types(rule)
-        payload_type = str(file_payload.get("type") or "").strip().lower()
-        if file_types:
-            if "media" in file_types:
-                if payload_type not in {"photo", "video"}:
-                    return False
-            elif payload_type not in file_types:
-                return False
-
-    filter_expr = str(rule.get("filterExpr") or "").strip()
-    if filter_expr:
-        if message is None:
-            return False
-        if not _evaluate_filter_expr(
-            filter_expr,
-            file_payload=file_payload,
-            message=message,
-        ):
-            return False
-
-    return True
-
-
-def _queue_auto_download_candidate(candidate: dict[str, int]) -> None:
-    telegram_id = _int_or_default(candidate.get("telegramId"), 0)
-    chat_id = _int_or_default(candidate.get("chatId"), 0)
-    message_id = _int_or_default(candidate.get("messageId"), 0)
-    if telegram_id <= 0 or chat_id == 0 or message_id == 0:
-        return
-
-    key = (telegram_id, chat_id, message_id)
-    if key in AUTO_DOWNLOAD_WAITING_KEYS:
-        return
-
-    if _auto_waiting_size(telegram_id) > AUTO_DOWNLOAD_MAX_WAITING_LENGTH:
-        return
-
-    AUTO_DOWNLOAD_WAITING_KEYS.add(key)
-    AUTO_DOWNLOAD_WAITING.setdefault(telegram_id, deque()).append(
-        {
-            "telegramId": telegram_id,
-            "chatId": chat_id,
-            "messageId": message_id,
-            "fileId": _int_or_default(candidate.get("fileId"), 0),
-        }
-    )
-
-
-def _pop_auto_download_candidate(telegram_id: int) -> dict[str, int] | None:
-    queue = AUTO_DOWNLOAD_WAITING.get(telegram_id)
-    if not queue:
-        return None
-
-    candidate = queue.popleft()
-    key = (
-        telegram_id,
-        _int_or_default(candidate.get("chatId"), 0),
-        _int_or_default(candidate.get("messageId"), 0),
-    )
-    AUTO_DOWNLOAD_WAITING_KEYS.discard(key)
-    if not queue:
-        AUTO_DOWNLOAD_WAITING.pop(telegram_id, None)
-    return candidate
-
-
-def _auto_waiting_size(telegram_id: int) -> int:
-    queue = AUTO_DOWNLOAD_WAITING.get(telegram_id)
-    if not queue:
-        return 0
-    return len(queue)
-
-
-def _queue_comment_thread_scan(
-    *,
-    telegram_id: int,
-    source_chat_id: int,
-    thread_chat_id: int,
-    message_thread_id: int,
-) -> None:
-    if (
-        telegram_id <= 0
-        or source_chat_id == 0
-        or thread_chat_id == 0
-        or message_thread_id == 0
-    ):
-        return
-
-    key = (telegram_id, thread_chat_id, message_thread_id)
-    current = AUTO_DOWNLOAD_COMMENT_THREADS.get(key)
-    if current is not None:
-        return
-
-    AUTO_DOWNLOAD_COMMENT_THREADS[key] = {
-        "telegramId": telegram_id,
-        "sourceChatId": source_chat_id,
-        "threadChatId": thread_chat_id,
-        "messageThreadId": message_thread_id,
-        "nextFileType": "",
-        "nextFromMessageId": 0,
-        "isComplete": False,
-    }
-
-
-def _queue_transfer_candidate(candidate: dict[str, Any]) -> None:
-    telegram_id = _int_or_default(candidate.get("telegramId"), 0)
-    unique_id = str(candidate.get("uniqueId") or "").strip()
-    if telegram_id <= 0 or not unique_id:
-        return
-
-    key = (telegram_id, unique_id)
-    if key in TRANSFER_WAITING_KEYS:
-        return
-
-    TRANSFER_WAITING_KEYS.add(key)
-    TRANSFER_WAITING.append(
-        {
-            "telegramId": telegram_id,
-            "chatId": _int_or_default(candidate.get("chatId"), 0),
-            "uniqueId": unique_id,
-            "fileId": _int_or_default(candidate.get("id"), 0),
-        }
-    )
-
-
-def _pop_transfer_candidate() -> dict[str, Any] | None:
-    if not TRANSFER_WAITING:
-        return None
-
-    candidate = TRANSFER_WAITING.popleft()
-    TRANSFER_WAITING_KEYS.discard(
-        (
-            _int_or_default(candidate.get("telegramId"), 0),
-            str(candidate.get("uniqueId") or "").strip(),
-        )
-    )
-    return candidate
-
-
-def _tdlib_chat_history_batch(
-    td_manager: TdlibAuthManager,
-    *,
-    telegram_id: int,
-    root_path: str,
-    chat_id: int,
-    from_message_id: int,
-    limit: int,
-) -> list[dict[str, Any]]:
-    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
-        raise RuntimeError("TDLib is not ready yet. Please try again.")
-
-    result = td_manager.request(
-        str(telegram_id),
-        {
-            "@type": "getChatHistory",
-            "chat_id": chat_id,
-            "from_message_id": from_message_id,
-            "offset": -1 if from_message_id > 0 else 0,
-            "limit": limit,
-            "only_local": False,
-        },
-        timeout_seconds=25.0,
-    )
-    if str(result.get("@type") or "") == "error":
-        raise RuntimeError(str(result.get("message") or "Failed to fetch chat history"))
-
-    messages = result.get("messages")
-    if not isinstance(messages, list):
-        return []
-    return [item for item in messages if isinstance(item, dict)]
-
-
-def _tdlib_search_chat_messages_batch(
-    td_manager: TdlibAuthManager,
-    *,
-    telegram_id: int,
-    root_path: str,
-    chat_id: int,
-    from_message_id: int,
-    query: str,
-    file_type: str,
-    message_thread_id: int = 0,
-    limit: int = AUTO_DOWNLOAD_MAX_WAITING_LENGTH,
-) -> tuple[list[dict[str, Any]], int]:
-    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
-        raise RuntimeError("TDLib is not ready yet. Please try again.")
-
-    filter_type = _search_filter_type(file_type)
-    payload: dict[str, Any] = {
-        "@type": "searchChatMessages",
-        "chat_id": chat_id,
-        "query": query,
-        "from_message_id": from_message_id,
-        "offset": 0,
-        "limit": max(1, min(limit, 100)),
-        "filter": {"@type": filter_type} if filter_type else None,
-    }
-    if message_thread_id > 0:
-        payload["topic_id"] = {
-            "@type": "messageTopicThread",
-            "message_thread_id": message_thread_id,
-        }
-
-    result = td_manager.request(
-        str(telegram_id),
-        payload,
-        timeout_seconds=25.0,
-    )
-    if str(result.get("@type") or "") == "error":
-        raise RuntimeError(str(result.get("message") or "Failed to search messages"))
-
-    raw_messages = result.get("messages")
-    messages = (
-        [item for item in raw_messages if isinstance(item, dict)]
-        if isinstance(raw_messages, list)
-        else []
-    )
-    next_from_message_id = _int_or_default(result.get("next_from_message_id"), 0)
-    return messages, next_from_message_id
-
-
-def _auto_scan_is_blocked(
-    db: sqlite3.Connection,
-    *,
-    telegram_id: int,
-) -> bool:
-    limit = _auto_download_limit(db)
-    downloading = _db_count_downloading_files(db, telegram_id)
-    if downloading >= limit:
-        return True
-    return _auto_waiting_size(telegram_id) > AUTO_DOWNLOAD_MAX_WAITING_LENGTH
-
-
-def _automation_supports_comment_download(automation: dict[str, Any]) -> bool:
-    download_cfg = automation.get("download") if isinstance(automation, dict) else None
-    if not isinstance(download_cfg, dict) or not bool(download_cfg.get("enabled")):
-        return False
-
-    rule = download_cfg.get("rule") if isinstance(download_cfg, dict) else None
-    if not isinstance(rule, dict):
-        return False
-    return bool(rule.get("downloadCommentFiles"))
-
-
-async def _scan_auto_download_scope(
-    *,
-    db: sqlite3.Connection,
-    td_manager: TdlibAuthManager,
-    telegram_id: int,
-    root_path: str,
-    chat_id: int,
-    automation: dict[str, Any],
-    next_file_type: str,
-    next_from_message_id: int,
-    message_thread_id: int = 0,
-) -> tuple[str, int, bool, int]:
-    if _auto_scan_is_blocked(db, telegram_id=telegram_id):
-        return next_file_type, next_from_message_id, False, 0
-
-    download_cfg = automation.get("download", {})
-    rule = download_cfg.get("rule", {}) if isinstance(download_cfg, dict) else {}
-    if not isinstance(rule, dict):
-        rule = {}
-
-    file_types = _normalized_download_file_types(rule)
-    current_type = str(next_file_type or file_types[0]).strip().lower()
-    if current_type not in file_types:
-        current_type = file_types[0]
-    current_cursor = max(0, next_from_message_id)
-    query = str(rule.get("query") or "").strip()
-    added = 0
-
-    for _ in range(8):
-        if _auto_scan_is_blocked(db, telegram_id=telegram_id):
-            break
-
-        try:
-            messages, next_cursor = await asyncio.to_thread(
-                _tdlib_search_chat_messages_batch,
-                td_manager,
-                telegram_id=telegram_id,
-                root_path=root_path,
-                chat_id=chat_id,
-                from_message_id=current_cursor,
-                query=query,
-                file_type=current_type,
-                message_thread_id=message_thread_id,
-                limit=AUTO_DOWNLOAD_MAX_WAITING_LENGTH,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Auto-download scope scan failed for telegram=%s chat=%s type=%s thread=%s: %s",
-                telegram_id,
-                chat_id,
-                current_type,
-                message_thread_id,
-                exc,
-            )
-            return current_type, current_cursor, False, added
-
-        if not messages:
-            next_type_index = file_types.index(current_type) + 1
-            if next_type_index >= len(file_types):
-                return current_type, current_cursor, True, added
-
-            current_type = file_types[next_type_index]
-            current_cursor = 0
-            continue
-
-        for message in messages:
-            file_payload = _td_message_to_file(telegram_id, message)
-            if file_payload is None:
-                continue
-
-            if not _match_download_rule(
-                file_payload,
-                automation=automation,
-                message=message,
-                skip_query_and_types=True,
-            ):
-                continue
-
-            unique_id = str(file_payload.get("uniqueId") or "").strip()
-            if unique_id:
-                existing = _db_find_file_by_unique(
-                    db,
-                    telegram_id=telegram_id,
-                    unique_id=unique_id,
-                )
-                if existing is not None:
-                    existing_status = str(existing["download_status"] or "idle")
-                    if existing_status != "idle":
-                        continue
-
-            _db_upsert_tdlib_file_record(db, file_payload=file_payload)
-            _queue_auto_download_candidate(
-                {
-                    "telegramId": telegram_id,
-                    "chatId": _int_or_default(file_payload.get("chatId"), chat_id),
-                    "messageId": _int_or_default(file_payload.get("messageId"), 0),
-                    "fileId": _int_or_default(file_payload.get("id"), 0),
-                }
-            )
-            added += 1
-
-        if next_cursor <= 0:
-            next_type_index = file_types.index(current_type) + 1
-            if next_type_index >= len(file_types):
-                return current_type, 0, True, added
-
-            current_type = file_types[next_type_index]
-            current_cursor = 0
-            continue
-
-        current_cursor = next_cursor
-        break
-
-    return current_type, current_cursor, False, added
-
-
-async def _run_preload_scan_cycle(app: FastAPI) -> None:
-    td_manager = _tdlib_manager_from_app(app)
-    if td_manager is None:
-        return
-
-    db: sqlite3.Connection = app.state.db
-    automations = get_automation_map(db)
-    if not automations:
-        return
-
-    root_path_cache: dict[int, str | None] = {}
-    for (telegram_id, chat_id), automation in automations.items():
-        preload_cfg = (
-            automation.get("preload") if isinstance(automation, dict) else None
-        )
-        if not isinstance(preload_cfg, dict) or not bool(preload_cfg.get("enabled")):
-            continue
-
-        state = _int_or_default(automation.get("state"), 0)
-        if _state_is_enabled(state, HISTORY_PRELOAD_STATE):
-            continue
-
-        root_path = _tdlib_account_root_path(
-            app,
-            db,
-            telegram_id,
-            root_path_cache,
-        )
-        if root_path is None:
-            continue
-
-        cursor = _int_or_default(preload_cfg.get("nextFromMessageId"), 0)
-        try:
-            messages = await asyncio.to_thread(
-                _tdlib_chat_history_batch,
-                td_manager,
-                telegram_id=telegram_id,
-                root_path=root_path,
-                chat_id=chat_id,
-                from_message_id=cursor,
-                limit=100,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Preload scan failed for telegram=%s chat=%s: %s",
-                telegram_id,
-                chat_id,
-                exc,
-            )
-            continue
-
-        if not messages:
-            automation["state"] = _state_enable(state, HISTORY_PRELOAD_STATE)
-            _persist_automation(
-                db,
-                telegram_id=telegram_id,
-                chat_id=chat_id,
-                automation=automation,
-            )
-            continue
-
-        for message in messages:
-            file_payload = _td_message_to_file(telegram_id, message)
-            if file_payload is None:
-                continue
-            _db_upsert_tdlib_file_record(db, file_payload=file_payload)
-
-        automation.setdefault("preload", {})["nextFromMessageId"] = _int_or_default(
-            messages[-1].get("id"),
-            cursor,
-        )
-        _persist_automation(
-            db,
-            telegram_id=telegram_id,
-            chat_id=chat_id,
-            automation=automation,
-        )
-
-
-async def _run_auto_download_scan_cycle(app: FastAPI) -> None:
-    db: sqlite3.Connection = app.state.db
-    if not _is_download_time(db):
-        return
-
-    td_manager = _tdlib_manager_from_app(app)
-    if td_manager is None:
-        return
-
-    automations = get_automation_map(db)
-    if not automations:
-        return
-
-    root_path_cache: dict[int, str | None] = {}
-    for (telegram_id, chat_id), automation in automations.items():
-        download_cfg = (
-            automation.get("download") if isinstance(automation, dict) else None
-        )
-        if not isinstance(download_cfg, dict) or not bool(download_cfg.get("enabled")):
-            continue
-
-        rule = download_cfg.get("rule")
-        if not isinstance(rule, dict) or not bool(rule.get("downloadHistory", True)):
-            continue
-
-        state = _int_or_default(automation.get("state"), 0)
-        scan_complete = _state_is_enabled(state, HISTORY_DOWNLOAD_SCAN_STATE)
-        comment_enabled = _automation_supports_comment_download(automation)
-        comment_keys = [
-            key
-            for key, item in AUTO_DOWNLOAD_COMMENT_THREADS.items()
-            if _int_or_default(item.get("telegramId"), 0) == telegram_id
-            and _int_or_default(item.get("sourceChatId"), 0) == chat_id
-            and not bool(item.get("isComplete"))
-        ]
-        has_pending_comment_scan = bool(comment_keys)
-        if scan_complete and not (comment_enabled and has_pending_comment_scan):
-            if _auto_waiting_size(telegram_id) == 0 and not _state_is_enabled(
-                state,
-                HISTORY_DOWNLOAD_STATE,
-            ):
-                automation["state"] = _state_enable(state, HISTORY_DOWNLOAD_STATE)
-                _persist_automation(
-                    db,
-                    telegram_id=telegram_id,
-                    chat_id=chat_id,
-                    automation=automation,
-                )
-            continue
-
-        root_path = _tdlib_account_root_path(
-            app,
-            db,
-            telegram_id,
-            root_path_cache,
-        )
-        if root_path is None:
-            continue
-
-        if not scan_complete:
-            (
-                next_file_type,
-                next_cursor,
-                is_complete,
-                _,
-            ) = await _scan_auto_download_scope(
-                db=db,
-                td_manager=td_manager,
-                telegram_id=telegram_id,
-                root_path=root_path,
-                chat_id=chat_id,
-                automation=automation,
-                next_file_type=str(download_cfg.get("nextFileType") or ""),
-                next_from_message_id=_int_or_default(
-                    download_cfg.get("nextFromMessageId"), 0
-                ),
-                message_thread_id=0,
-            )
-
-            automation.setdefault("download", {})["nextFileType"] = next_file_type
-            automation.setdefault("download", {})["nextFromMessageId"] = next_cursor
-
-            next_state = state
-            if is_complete:
-                next_state = _state_enable(next_state, HISTORY_DOWNLOAD_SCAN_STATE)
-            if is_complete and _auto_waiting_size(telegram_id) == 0:
-                next_state = _state_enable(next_state, HISTORY_DOWNLOAD_STATE)
-            automation["state"] = next_state
-            _persist_automation(
-                db,
-                telegram_id=telegram_id,
-                chat_id=chat_id,
-                automation=automation,
-            )
-
-        if not comment_enabled:
-            for key in comment_keys:
-                AUTO_DOWNLOAD_COMMENT_THREADS.pop(key, None)
-            continue
-
-        for key in comment_keys:
-            comment_scan = AUTO_DOWNLOAD_COMMENT_THREADS.get(key)
-            if not isinstance(comment_scan, dict):
-                continue
-
-            thread_chat_id = _int_or_default(comment_scan.get("threadChatId"), 0)
-            message_thread_id = _int_or_default(comment_scan.get("messageThreadId"), 0)
-            if thread_chat_id == 0 or message_thread_id == 0:
-                AUTO_DOWNLOAD_COMMENT_THREADS.pop(key, None)
-                continue
-
-            (
-                next_file_type,
-                next_cursor,
-                comment_complete,
-                _,
-            ) = await _scan_auto_download_scope(
-                db=db,
-                td_manager=td_manager,
-                telegram_id=telegram_id,
-                root_path=root_path,
-                chat_id=thread_chat_id,
-                automation=automation,
-                next_file_type=str(comment_scan.get("nextFileType") or ""),
-                next_from_message_id=_int_or_default(
-                    comment_scan.get("nextFromMessageId"), 0
-                ),
-                message_thread_id=message_thread_id,
-            )
-
-            if comment_complete:
-                AUTO_DOWNLOAD_COMMENT_THREADS.pop(key, None)
-            else:
-                comment_scan["nextFileType"] = next_file_type
-                comment_scan["nextFromMessageId"] = next_cursor
-
-
-async def _run_auto_download_tick(app: FastAPI) -> None:
-    db: sqlite3.Connection = app.state.db
-    if not _is_download_time(db):
-        return
-
-    td_manager = _tdlib_manager_from_app(app)
-    if td_manager is None or not AUTO_DOWNLOAD_WAITING:
-        return
-
-    limit = _auto_download_limit(db)
-    root_path_cache: dict[int, str | None] = {}
-
-    for telegram_id in list(AUTO_DOWNLOAD_WAITING.keys()):
-        surplus = max(0, limit - _db_count_downloading_files(db, telegram_id))
-        if surplus <= 0:
-            continue
-
-        automation_map = get_automation_map(db, telegram_id=telegram_id)
-        root_path = _tdlib_account_root_path(app, db, telegram_id, root_path_cache)
-        if root_path is None:
-            continue
-
-        while surplus > 0:
-            candidate = _pop_auto_download_candidate(telegram_id)
-            if candidate is None:
-                break
-
-            try:
-                file_record = await asyncio.to_thread(
-                    _start_tdlib_download_for_message,
-                    td_manager,
-                    telegram_id=telegram_id,
-                    root_path=root_path,
-                    chat_id=_int_or_default(candidate.get("chatId"), 0),
-                    message_id=_int_or_default(candidate.get("messageId"), 0),
-                    file_id=_int_or_default(candidate.get("fileId"), 0),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Auto-download start failed for telegram=%s candidate=%s: %s",
-                    telegram_id,
-                    candidate,
-                    exc,
-                )
-                continue
-
-            _db_upsert_tdlib_file_record(db, file_payload=file_record)
-            status_payload = _td_file_status_payload(file_record)
-            await _emit_ws_payload(
-                _build_ws_payload(EVENT_TYPE_FILE_STATUS, status_payload),
-            )
-
-            candidate_chat_id = _int_or_default(candidate.get("chatId"), 0)
-            automation = automation_map.get((telegram_id, candidate_chat_id))
-            if isinstance(automation, dict) and _automation_supports_comment_download(
-                automation
-            ):
-                thread_chat_id = _int_or_default(file_record.get("threadChatId"), 0)
-                message_thread_id = _int_or_default(
-                    file_record.get("messageThreadId"), 0
-                )
-                file_chat_id = _int_or_default(
-                    file_record.get("chatId"), candidate_chat_id
-                )
-                if (
-                    thread_chat_id > 0
-                    and message_thread_id > 0
-                    and thread_chat_id != file_chat_id
-                ):
-                    _queue_comment_thread_scan(
-                        telegram_id=telegram_id,
-                        source_chat_id=candidate_chat_id,
-                        thread_chat_id=thread_chat_id,
-                        message_thread_id=message_thread_id,
-                    )
-
-            monitor_file_id = _int_or_default(file_record.get("id"), 0)
-            if monitor_file_id > 0:
-                _ensure_tdlib_download_monitor(
-                    app,
-                    session_id=f"worker:{telegram_id}",
-                    telegram_id=telegram_id,
-                    file_id=monitor_file_id,
-                    unique_id=str(file_record.get("uniqueId") or ""),
-                )
-
-            surplus -= 1
-
-
-async def _emit_transfer_status(payload: dict[str, Any]) -> None:
-    await _emit_ws_payload(
-        _build_ws_payload(EVENT_TYPE_FILE_STATUS, payload),
-    )
-
-
-async def _run_transfer_scan_cycle(app: FastAPI) -> None:
-    db: sqlite3.Connection = app.state.db
-    automations = get_automation_map(db)
-    if not automations:
-        return
-
-    for (telegram_id, chat_id), automation in automations.items():
-        transfer_cfg = (
-            automation.get("transfer") if isinstance(automation, dict) else None
-        )
-        if not isinstance(transfer_cfg, dict) or not bool(transfer_cfg.get("enabled")):
-            continue
-
-        rule = transfer_cfg.get("rule")
-        if not isinstance(rule, dict):
-            continue
-
-        candidates = _db_transfer_candidates(
-            db,
-            telegram_id=telegram_id,
-            chat_id=chat_id,
-            limit=200,
-        )
-        for item in candidates:
-            _queue_transfer_candidate(item)
-
-        transfer_history = bool(rule.get("transferHistory", True))
-        state = _int_or_default(automation.get("state"), 0)
-        if (
-            transfer_history
-            and not candidates
-            and not _state_is_enabled(state, HISTORY_TRANSFER_STATE)
-        ):
-            automation["state"] = _state_enable(state, HISTORY_TRANSFER_STATE)
-            _persist_automation(
-                db,
-                telegram_id=telegram_id,
-                chat_id=chat_id,
-                automation=automation,
-            )
-
-
-async def _run_transfer_tick(app: FastAPI) -> None:
-    candidate = _pop_transfer_candidate()
-    if candidate is None:
-        return
-
-    db: sqlite3.Connection = app.state.db
-    telegram_id = _int_or_default(candidate.get("telegramId"), 0)
-    chat_id = _int_or_default(candidate.get("chatId"), 0)
-    unique_id = str(candidate.get("uniqueId") or "")
-    if telegram_id <= 0 or chat_id == 0 or not unique_id:
-        return
-
-    automations = get_automation_map(db, telegram_id=telegram_id)
-    automation = automations.get((telegram_id, chat_id))
-    if not isinstance(automation, dict):
-        return
-
-    transfer_cfg = automation.get("transfer")
-    if not isinstance(transfer_cfg, dict) or not bool(transfer_cfg.get("enabled")):
-        return
-
-    rule = transfer_cfg.get("rule")
-    if not isinstance(rule, dict):
-        return
-
-    row = _db_file_for_transfer(
-        db,
-        telegram_id=telegram_id,
-        unique_id=unique_id,
-    )
-    if row is None:
-        return
-
-    in_progress_payload = _db_update_transfer_status(
-        db,
-        telegram_id=telegram_id,
-        unique_id=unique_id,
-        transfer_status="transferring",
-    )
-    if in_progress_payload is not None:
-        await _emit_transfer_status(in_progress_payload)
-
-    try:
-        transfer_status, resolved_path = await asyncio.to_thread(
-            _execute_transfer,
-            row,
-            rule,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Transfer failed for telegram=%s chat=%s unique=%s: %s",
-            telegram_id,
-            chat_id,
-            unique_id,
-            exc,
-        )
-        transfer_status = "error"
-        resolved_path = None
-
-    final_payload = _db_update_transfer_status(
-        db,
-        telegram_id=telegram_id,
-        unique_id=unique_id,
-        transfer_status=transfer_status,
-        local_path=resolved_path,
-    )
-    if final_payload is not None:
-        await _emit_transfer_status(final_payload)
-
-
-async def _background_workers_loop(app: FastAPI) -> None:
-    last_preload = 0.0
-    last_auto_scan = 0.0
-    last_auto_tick = 0.0
-    last_transfer_scan = 0.0
-    last_transfer_tick = 0.0
-    last_speed_persist = 0.0
-
-    while True:
-        now = time.monotonic()
-
-        try:
-            if now - last_preload >= PRELOAD_SCAN_INTERVAL_SECONDS:
-                last_preload = now
-                await _run_preload_scan_cycle(app)
-
-            if now - last_auto_scan >= AUTO_DOWNLOAD_SCAN_INTERVAL_SECONDS:
-                last_auto_scan = now
-                await _run_auto_download_scan_cycle(app)
-
-            if now - last_auto_tick >= AUTO_DOWNLOAD_TICK_INTERVAL_SECONDS:
-                last_auto_tick = now
-                await _run_auto_download_tick(app)
-
-            if now - last_transfer_scan >= TRANSFER_SCAN_INTERVAL_SECONDS:
-                last_transfer_scan = now
-                await _run_transfer_scan_cycle(app)
-
-            if now - last_transfer_tick >= TRANSFER_TICK_INTERVAL_SECONDS:
-                last_transfer_tick = now
-                await _run_transfer_tick(app)
-
-            db: sqlite3.Connection = app.state.db
-            speed_interval_seconds = float(_avg_speed_interval(db))
-            if now - last_speed_persist >= speed_interval_seconds:
-                last_speed_persist = now
-                _persist_speed_statistics(db)
-        except Exception as exc:
-            logger.exception("Background worker loop error: %s", exc)
-
-        await asyncio.sleep(1.0)
-
-
 def _apply_chat_auto_settings(
     chats: list[dict[str, Any]],
     *,
@@ -2265,195 +815,65 @@ def _td_file_status_payload(file_record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _cache_tdlib_file_preview(
-    *,
-    telegram_id: int,
-    unique_id: str,
-    file_id: int | None = None,
-    mime_type: str | None = None,
-    local_path: str | None = None,
-) -> None:
-    normalized_unique = unique_id.strip()
-    if not normalized_unique:
-        return
-
-    key = (telegram_id, normalized_unique)
-    with STATE_LOCK:
-        current = dict(TDLIB_FILE_PREVIEW_CACHE.get(key) or {})
-        if file_id is not None and file_id > 0:
-            current["fileId"] = file_id
-        if mime_type:
-            current["mimeType"] = str(mime_type)
-        if local_path:
-            current["path"] = str(local_path)
-        current["updatedAt"] = int(time.time() * 1000)
-        TDLIB_FILE_PREVIEW_CACHE[key] = current
-
-
-def _evict_tdlib_file_preview(
-    *,
-    telegram_id: int,
-    unique_id: str | None = None,
-    file_id: int | None = None,
-) -> None:
-    normalized_unique = str(unique_id or "").strip()
-    normalized_file_id = int(file_id or 0)
-
-    with STATE_LOCK:
-        to_delete: list[tuple[int, str]] = []
-        for key, value in TDLIB_FILE_PREVIEW_CACHE.items():
-            key_telegram_id, key_unique_id = key
-            if key_telegram_id != telegram_id:
-                continue
-
-            matches_unique = (
-                bool(normalized_unique) and key_unique_id == normalized_unique
-            )
-            matches_file_id = (
-                normalized_file_id > 0
-                and _int_or_default(value.get("fileId"), 0) == normalized_file_id
-            )
-            if matches_unique or matches_file_id:
-                to_delete.append(key)
-
-        for key in to_delete:
-            TDLIB_FILE_PREVIEW_CACHE.pop(key, None)
-
-
-def _cached_tdlib_file_preview(
-    *,
-    telegram_id: int,
-    unique_id: str,
-) -> dict[str, Any] | None:
-    key = (telegram_id, unique_id.strip())
-    with STATE_LOCK:
-        entry = TDLIB_FILE_PREVIEW_CACHE.get(key)
-        if entry is None:
-            return None
-        return dict(entry)
-
-
-def _unique_id_from_tdlib_file_cache(
-    *,
-    telegram_id: int,
-    file_id: int,
-) -> str:
-    if file_id <= 0:
-        return ""
-
-    with STATE_LOCK:
-        for (
-            cache_telegram_id,
-            cache_unique_id,
-        ), payload in TDLIB_FILE_PREVIEW_CACHE.items():
-            if cache_telegram_id != telegram_id:
-                continue
-            if _int_or_default(payload.get("fileId"), 0) == file_id:
-                return cache_unique_id
-    return ""
-
-
-def _resolve_tdlib_file_reference(
-    *,
-    telegram_id: int,
-    file_id: int,
-    unique_id: str,
-) -> tuple[int, str]:
-    normalized_unique = unique_id.strip()
-    normalized_file_id = file_id
-
-    if normalized_file_id <= 0 and normalized_unique:
-        cached = _cached_tdlib_file_preview(
-            telegram_id=telegram_id,
-            unique_id=normalized_unique,
-        )
-        normalized_file_id = _int_or_default((cached or {}).get("fileId"), 0)
-
-    if not normalized_unique and normalized_file_id > 0:
-        normalized_unique = _unique_id_from_tdlib_file_cache(
-            telegram_id=telegram_id,
-            file_id=normalized_file_id,
+def _tdlib_monitor_deps() -> TdlibMonitorDeps:
+    async def _emit_file_update(
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        await _emit_ws_payload(
+            _build_ws_payload(EVENT_TYPE_FILE_UPDATE, payload),
+            session_id=session_id,
         )
 
-    return normalized_file_id, normalized_unique
+    async def _emit_file_status(
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        await _emit_ws_payload(
+            _build_ws_payload(EVENT_TYPE_FILE_STATUS, payload),
+            session_id=session_id,
+        )
 
+    async def _emit_download_aggregate(
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        await _emit_ws_payload(
+            _build_ws_payload(EVENT_TYPE_FILE_DOWNLOAD, payload),
+            session_id=session_id,
+        )
 
-def _media_type_for_path(path: str, hint: str | None) -> str:
-    normalized_hint = str(hint or "").strip()
-    if normalized_hint:
-        return normalized_hint
-    guessed, _ = mimetypes.guess_type(path)
-    return str(guessed or "application/octet-stream")
-
-
-def _resolve_tdlib_preview_info(
-    td_manager: TdlibAuthManager,
-    *,
-    telegram_id: int,
-    root_path: str,
-    unique_id: str,
-) -> dict[str, Any] | None:
-    cached = _cached_tdlib_file_preview(telegram_id=telegram_id, unique_id=unique_id)
-    if cached is None:
-        return None
-
-    path_value = str(cached.get("path") or "").strip()
-    if path_value:
-        path_obj = Path(path_value)
-        if path_obj.exists() and path_obj.is_file():
-            return {
-                "path": str(path_obj),
-                "mimeType": _media_type_for_path(
-                    str(path_obj),
-                    str(cached.get("mimeType") or ""),
-                ),
-            }
-
-    file_id = _int_or_default(cached.get("fileId"), 0)
-    if file_id == 0:
-        return None
-
-    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
-        return None
-
-    td_file = td_manager.request(
-        str(telegram_id),
-        {
-            "@type": "getFile",
-            "file_id": file_id,
-        },
-        timeout_seconds=15.0,
-    )
-    if str(td_file.get("@type") or "") == "error":
-        return None
-
-    local = td_file.get("local") if isinstance(td_file.get("local"), dict) else {}
-    if not bool(local.get("is_downloading_completed")):
-        return None
-
-    resolved_path = str(local.get("path") or "").strip()
-    if not resolved_path:
-        return None
-
-    resolved_obj = Path(resolved_path)
-    if not resolved_obj.exists() or not resolved_obj.is_file():
-        return None
-
-    _cache_tdlib_file_preview(
-        telegram_id=telegram_id,
-        unique_id=unique_id,
-        file_id=file_id,
-        mime_type=str(cached.get("mimeType") or ""),
-        local_path=str(resolved_obj),
-    )
-
-    return {
-        "path": str(resolved_obj),
-        "mimeType": _media_type_for_path(
-            str(resolved_obj),
-            str(cached.get("mimeType") or ""),
+    return TdlibMonitorDeps(
+        emit_file_update=_emit_file_update,
+        emit_file_status=_emit_file_status,
+        emit_download_aggregate=_emit_download_aggregate,
+        update_tdlib_file_status=lambda db,
+        telegram_id,
+        file_id,
+        unique_id,
+        status_payload: _db_update_tdlib_file_status(
+            db,
+            telegram_id=telegram_id,
+            file_id=file_id,
+            unique_id=unique_id,
+            status_payload=status_payload,
         ),
-    }
+        update_speed_tracker=lambda db,
+        telegram_id,
+        file_id,
+        downloaded_size,
+        timestamp_ms: _update_speed_tracker(
+            db,
+            telegram_id=telegram_id,
+            file_id=file_id,
+            downloaded_size=downloaded_size,
+            timestamp_ms=timestamp_ms,
+        ),
+        clear_speed_tracker_file=lambda telegram_id, file_id: _clear_speed_tracker_file(
+            telegram_id=telegram_id,
+            file_id=file_id,
+        ),
+    )
 
 
 def _stop_tdlib_download_monitor(
@@ -2462,334 +882,11 @@ def _stop_tdlib_download_monitor(
     telegram_id: int,
     file_id: int,
 ) -> None:
-    if file_id <= 0:
-        return
-
-    key = (session_id, telegram_id, file_id)
-    with STATE_LOCK:
-        task = TDLIB_DOWNLOAD_TASKS.pop(key, None)
-        TDLIB_DOWNLOAD_PROGRESS.pop(key, None)
-
-    if task is not None and not task.done():
-        task.cancel()
-
-
-def _tdlib_get_file_payload(
-    td_manager: TdlibAuthManager,
-    *,
-    telegram_id: int,
-    root_path: str,
-    file_id: int,
-) -> dict[str, Any]:
-    if file_id <= 0:
-        raise RuntimeError("File id is required")
-    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
-        raise RuntimeError("TDLib is not ready yet. Please try again.")
-
-    result = td_manager.request(
-        str(telegram_id),
-        {
-            "@type": "getFile",
-            "file_id": file_id,
-        },
-        timeout_seconds=15.0,
-    )
-    if str(result.get("@type") or "") == "error":
-        raise RuntimeError(str(result.get("message") or "File not found"))
-    return result
-
-
-def _tdlib_cancel_download_fallback(
-    td_manager: TdlibAuthManager,
-    *,
-    telegram_id: int,
-    root_path: str,
-    file_id: int,
-    unique_id: str,
-) -> dict[str, Any]:
-    resolved_file_id, resolved_unique_id = _resolve_tdlib_file_reference(
+    _stop_tdlib_download_monitor_impl(
+        session_id=session_id,
         telegram_id=telegram_id,
         file_id=file_id,
-        unique_id=unique_id,
     )
-    if resolved_file_id <= 0:
-        raise RuntimeError("File not found")
-
-    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
-        raise RuntimeError("TDLib is not ready yet. Please try again.")
-
-    cancel_result = td_manager.request(
-        str(telegram_id),
-        {
-            "@type": "cancelDownloadFile",
-            "file_id": resolved_file_id,
-            "only_if_pending": False,
-        },
-        timeout_seconds=20.0,
-    )
-    if str(cancel_result.get("@type") or "") == "error":
-        raise RuntimeError(
-            str(cancel_result.get("message") or "Failed to cancel download")
-        )
-
-    current = _tdlib_get_file_payload(
-        td_manager,
-        telegram_id=telegram_id,
-        root_path=root_path,
-        file_id=resolved_file_id,
-    )
-    remote = current.get("remote") if isinstance(current.get("remote"), dict) else {}
-    resolved_unique_id = (
-        str(remote.get("unique_id") or "").strip() or resolved_unique_id
-    )
-    _cache_tdlib_file_preview(
-        telegram_id=telegram_id,
-        unique_id=resolved_unique_id,
-        file_id=resolved_file_id,
-    )
-    if unique_id.strip() and unique_id.strip() != resolved_unique_id:
-        _cache_tdlib_file_preview(
-            telegram_id=telegram_id,
-            unique_id=unique_id.strip(),
-            file_id=resolved_file_id,
-        )
-
-    return {
-        "fileId": resolved_file_id,
-        "uniqueId": resolved_unique_id,
-        "downloadStatus": "idle",
-        "localPath": "",
-        "completionDate": 0,
-        "downloadedSize": 0,
-        "transferStatus": "idle",
-    }
-
-
-def _tdlib_toggle_pause_download_fallback(
-    td_manager: TdlibAuthManager,
-    *,
-    telegram_id: int,
-    root_path: str,
-    file_id: int,
-    unique_id: str,
-    is_paused: bool | None,
-) -> tuple[dict[str, Any], bool]:
-    resolved_file_id, resolved_unique_id = _resolve_tdlib_file_reference(
-        telegram_id=telegram_id,
-        file_id=file_id,
-        unique_id=unique_id,
-    )
-    if resolved_file_id <= 0:
-        raise RuntimeError("File not found")
-
-    current = _tdlib_get_file_payload(
-        td_manager,
-        telegram_id=telegram_id,
-        root_path=root_path,
-        file_id=resolved_file_id,
-    )
-    local = current.get("local") if isinstance(current.get("local"), dict) else {}
-    currently_downloading = bool(local.get("is_downloading_active"))
-    target_pause = is_paused if is_paused is not None else currently_downloading
-
-    if target_pause:
-        action_result = td_manager.request(
-            str(telegram_id),
-            {
-                "@type": "cancelDownloadFile",
-                "file_id": resolved_file_id,
-                "only_if_pending": False,
-            },
-            timeout_seconds=20.0,
-        )
-        if str(action_result.get("@type") or "") == "error":
-            raise RuntimeError(
-                str(action_result.get("message") or "Failed to pause download")
-            )
-
-        refreshed = _tdlib_get_file_payload(
-            td_manager,
-            telegram_id=telegram_id,
-            root_path=root_path,
-            file_id=resolved_file_id,
-        )
-        payload = _td_status_payload_from_td_file(
-            refreshed,
-            telegram_id=telegram_id,
-            fallback_unique_id=resolved_unique_id,
-        )
-        if payload["downloadStatus"] not in {"completed", "downloading"}:
-            payload["downloadStatus"] = (
-                "paused"
-                if _int_or_default(payload.get("downloadedSize"), 0) > 0
-                else "idle"
-            )
-        return payload, False
-
-    action_result = td_manager.request(
-        str(telegram_id),
-        {
-            "@type": "downloadFile",
-            "file_id": resolved_file_id,
-            "priority": 16,
-            "offset": 0,
-            "limit": 0,
-            "synchronous": False,
-        },
-        timeout_seconds=20.0,
-    )
-    if str(action_result.get("@type") or "") == "error":
-        raise RuntimeError(
-            str(action_result.get("message") or "Failed to resume download")
-        )
-
-    refreshed = _tdlib_get_file_payload(
-        td_manager,
-        telegram_id=telegram_id,
-        root_path=root_path,
-        file_id=resolved_file_id,
-    )
-    payload = _td_status_payload_from_td_file(
-        refreshed,
-        telegram_id=telegram_id,
-        fallback_unique_id=resolved_unique_id,
-    )
-    if payload["downloadStatus"] != "completed":
-        payload["downloadStatus"] = "downloading"
-    return payload, True
-
-
-def _tdlib_remove_file_fallback(
-    td_manager: TdlibAuthManager,
-    *,
-    telegram_id: int,
-    root_path: str,
-    file_id: int,
-    unique_id: str,
-) -> dict[str, Any]:
-    resolved_file_id, resolved_unique_id = _resolve_tdlib_file_reference(
-        telegram_id=telegram_id,
-        file_id=file_id,
-        unique_id=unique_id,
-    )
-    if resolved_file_id <= 0 and not resolved_unique_id:
-        raise RuntimeError("File not found")
-
-    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
-        raise RuntimeError("TDLib is not ready yet. Please try again.")
-
-    if resolved_file_id > 0:
-        td_manager.request(
-            str(telegram_id),
-            {
-                "@type": "cancelDownloadFile",
-                "file_id": resolved_file_id,
-                "only_if_pending": False,
-            },
-            timeout_seconds=20.0,
-        )
-        td_manager.request(
-            str(telegram_id),
-            {
-                "@type": "deleteFile",
-                "file_id": resolved_file_id,
-            },
-            timeout_seconds=20.0,
-        )
-
-    _evict_tdlib_file_preview(
-        telegram_id=telegram_id,
-        unique_id=resolved_unique_id or unique_id,
-        file_id=resolved_file_id,
-    )
-
-    return {
-        "fileId": resolved_file_id,
-        "uniqueId": resolved_unique_id or unique_id,
-        "downloadStatus": "idle",
-        "localPath": "",
-        "completionDate": 0,
-        "downloadedSize": 0,
-        "transferStatus": "idle",
-        "removed": True,
-    }
-
-
-def _td_file_to_ws(file_payload: dict[str, Any]) -> dict[str, Any]:
-    local_raw = (
-        file_payload.get("local") if isinstance(file_payload.get("local"), dict) else {}
-    )
-    remote_raw = (
-        file_payload.get("remote")
-        if isinstance(file_payload.get("remote"), dict)
-        else {}
-    )
-    return {
-        "id": _int_or_default(file_payload.get("id"), 0),
-        "size": _int_or_default(file_payload.get("size"), 0),
-        "expectedSize": _int_or_default(file_payload.get("expected_size"), 0),
-        "local": {
-            "path": str(local_raw.get("path") or ""),
-            "canBeDownloaded": bool(local_raw.get("can_be_downloaded")),
-            "canBeDeleted": bool(local_raw.get("can_be_deleted")),
-            "isDownloadingActive": bool(local_raw.get("is_downloading_active")),
-            "isDownloadingCompleted": bool(local_raw.get("is_downloading_completed")),
-            "downloadOffset": _int_or_default(local_raw.get("download_offset"), 0),
-            "downloadedPrefixSize": _int_or_default(
-                local_raw.get("downloaded_prefix_size"), 0
-            ),
-            "downloadedSize": _int_or_default(local_raw.get("downloaded_size"), 0),
-        },
-        "remote": {
-            "id": _int_or_default(remote_raw.get("id"), 0),
-            "uniqueId": str(remote_raw.get("unique_id") or ""),
-            "isUploadingActive": bool(remote_raw.get("is_uploading_active")),
-            "isUploadingCompleted": bool(remote_raw.get("is_uploading_completed")),
-            "uploadedSize": _int_or_default(remote_raw.get("uploaded_size"), 0),
-        },
-    }
-
-
-def _td_status_payload_from_td_file(
-    file_payload: dict[str, Any],
-    *,
-    telegram_id: int,
-    fallback_unique_id: str,
-) -> dict[str, Any]:
-    local_raw = (
-        file_payload.get("local") if isinstance(file_payload.get("local"), dict) else {}
-    )
-    remote_raw = (
-        file_payload.get("remote")
-        if isinstance(file_payload.get("remote"), dict)
-        else {}
-    )
-    downloaded_size = _int_or_default(local_raw.get("downloaded_size"), 0)
-    is_completed = bool(local_raw.get("is_downloading_completed"))
-    is_downloading = bool(local_raw.get("is_downloading_active"))
-    status = (
-        "completed"
-        if is_completed
-        else (
-            "downloading"
-            if is_downloading
-            else ("paused" if downloaded_size > 0 else "idle")
-        )
-    )
-    unique_id = str(remote_raw.get("unique_id") or "").strip() or fallback_unique_id
-    completion_date = int(time.time() * 1000) if is_completed else 0
-    local_path = str(local_raw.get("path") or "") if is_completed else ""
-
-    return {
-        "fileId": _int_or_default(file_payload.get("id"), 0),
-        "uniqueId": unique_id,
-        "downloadStatus": status,
-        "localPath": local_path,
-        "completionDate": completion_date,
-        "downloadedSize": downloaded_size,
-        "transferStatus": "idle",
-        "telegramId": telegram_id,
-    }
 
 
 async def _emit_tdlib_download_aggregate(
@@ -2797,173 +894,11 @@ async def _emit_tdlib_download_aggregate(
     session_id: str,
     telegram_id: int,
 ) -> None:
-    with STATE_LOCK:
-        account_items = [
-            value
-            for (sid, tid, _), value in TDLIB_DOWNLOAD_PROGRESS.items()
-            if sid == session_id and tid == telegram_id
-        ]
-
-    total_size = sum(
-        _int_or_default(item.get("totalSize"), 0) for item in account_items
-    )
-    total_downloaded = sum(
-        _int_or_default(item.get("downloadedSize"), 0) for item in account_items
-    )
-    total_count = sum(1 for item in account_items if bool(item.get("active")))
-
-    await _emit_ws_payload(
-        _build_ws_payload(
-            EVENT_TYPE_FILE_DOWNLOAD,
-            {
-                "totalSize": total_size,
-                "totalCount": total_count,
-                "downloadedSize": total_downloaded,
-            },
-        ),
+    await _emit_tdlib_download_aggregate_impl(
         session_id=session_id,
+        telegram_id=telegram_id,
+        deps=_tdlib_monitor_deps(),
     )
-
-
-async def _monitor_tdlib_download(
-    app: FastAPI,
-    *,
-    session_id: str,
-    telegram_id: int,
-    file_id: int,
-    unique_id: str,
-) -> None:
-    monitor_key = (session_id, telegram_id, file_id)
-    account_key = str(telegram_id)
-    seen_progress = False
-    idle_rounds = 0
-    last_status_signature: tuple[str, int, str] | None = None
-
-    try:
-        while True:
-            td_manager = _tdlib_manager_from_app(app)
-            if td_manager is None:
-                break
-
-            try:
-                td_file = await asyncio.to_thread(
-                    td_manager.request,
-                    account_key,
-                    {
-                        "@type": "getFile",
-                        "file_id": file_id,
-                    },
-                    15.0,
-                )
-            except Exception:
-                await asyncio.sleep(0.8)
-                continue
-
-            if str(td_file.get("@type") or "") == "error":
-                break
-
-            ws_file = _td_file_to_ws(td_file)
-            status_payload = _td_status_payload_from_td_file(
-                td_file,
-                telegram_id=telegram_id,
-                fallback_unique_id=unique_id,
-            )
-            status = str(status_payload.get("downloadStatus") or "idle")
-            downloaded_size = _int_or_default(status_payload.get("downloadedSize"), 0)
-            now_ms = int(time.time() * 1000)
-            total_size = max(
-                _int_or_default(td_file.get("size"), 0),
-                _int_or_default(td_file.get("expected_size"), 0),
-            )
-            remote_raw = (
-                td_file.get("remote") if isinstance(td_file.get("remote"), dict) else {}
-            )
-            resolved_unique_id = (
-                str(remote_raw.get("unique_id") or "").strip() or unique_id
-            )
-            _cache_tdlib_file_preview(
-                telegram_id=telegram_id,
-                unique_id=resolved_unique_id,
-                file_id=file_id,
-                local_path=str(status_payload.get("localPath") or "").strip() or None,
-            )
-            if unique_id.strip() and unique_id.strip() != resolved_unique_id:
-                _cache_tdlib_file_preview(
-                    telegram_id=telegram_id,
-                    unique_id=unique_id,
-                    file_id=file_id,
-                    local_path=str(status_payload.get("localPath") or "").strip()
-                    or None,
-                )
-
-            db: sqlite3.Connection = app.state.db
-            _db_update_tdlib_file_status(
-                db,
-                telegram_id=telegram_id,
-                file_id=file_id,
-                unique_id=resolved_unique_id,
-                status_payload=status_payload,
-            )
-            _update_speed_tracker(
-                db,
-                telegram_id=telegram_id,
-                file_id=file_id,
-                downloaded_size=downloaded_size,
-                timestamp_ms=now_ms,
-            )
-
-            await _emit_ws_payload(
-                _build_ws_payload(EVENT_TYPE_FILE_UPDATE, {"file": ws_file}),
-                session_id=session_id,
-            )
-
-            status_signature = (
-                status,
-                downloaded_size,
-                str(status_payload.get("localPath") or ""),
-            )
-            if status_signature != last_status_signature:
-                await _emit_ws_payload(
-                    _build_ws_payload(EVENT_TYPE_FILE_STATUS, status_payload),
-                    session_id=session_id,
-                )
-                last_status_signature = status_signature
-
-            with STATE_LOCK:
-                TDLIB_DOWNLOAD_PROGRESS[monitor_key] = {
-                    "totalSize": total_size,
-                    "downloadedSize": downloaded_size,
-                    "active": status == "downloading",
-                }
-            await _emit_tdlib_download_aggregate(
-                session_id=session_id,
-                telegram_id=telegram_id,
-            )
-
-            if status == "completed":
-                break
-
-            if status == "downloading" or downloaded_size > 0:
-                seen_progress = True
-                idle_rounds = 0
-            else:
-                idle_rounds += 1
-                if seen_progress and idle_rounds >= 3:
-                    break
-                if not seen_progress and idle_rounds >= 8:
-                    break
-
-            await asyncio.sleep(0.8)
-    finally:
-        with STATE_LOCK:
-            TDLIB_DOWNLOAD_TASKS.pop(monitor_key, None)
-            TDLIB_DOWNLOAD_PROGRESS.pop(monitor_key, None)
-        _clear_speed_tracker_file(telegram_id=telegram_id, file_id=file_id)
-
-        await _emit_tdlib_download_aggregate(
-            session_id=session_id,
-            telegram_id=telegram_id,
-        )
 
 
 def _ensure_tdlib_download_monitor(
@@ -2974,273 +909,14 @@ def _ensure_tdlib_download_monitor(
     file_id: int,
     unique_id: str,
 ) -> None:
-    key = (session_id, telegram_id, file_id)
-    with STATE_LOCK:
-        existing = TDLIB_DOWNLOAD_TASKS.get(key)
-        if existing is not None and not existing.done():
-            return
-
-        task = asyncio.create_task(
-            _monitor_tdlib_download(
-                app,
-                session_id=session_id,
-                telegram_id=telegram_id,
-                file_id=file_id,
-                unique_id=unique_id,
-            )
-        )
-        TDLIB_DOWNLOAD_TASKS[key] = task
-
-
-def _start_tdlib_download_for_message(
-    td_manager: TdlibAuthManager,
-    *,
-    telegram_id: int,
-    root_path: str,
-    chat_id: int,
-    message_id: int,
-    file_id: int,
-) -> dict[str, Any]:
-    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
-        raise RuntimeError("TDLib is not ready yet. Please try again.")
-
-    account_key = str(telegram_id)
-    message_result = td_manager.request(
-        account_key,
-        {
-            "@type": "getMessage",
-            "chat_id": chat_id,
-            "message_id": message_id,
-        },
-        timeout_seconds=25.0,
+    _ensure_tdlib_download_monitor_impl(
+        app,
+        session_id=session_id,
+        telegram_id=telegram_id,
+        file_id=file_id,
+        unique_id=unique_id,
+        deps=_tdlib_monitor_deps(),
     )
-    if str(message_result.get("@type") or "") == "error":
-        raise RuntimeError(str(message_result.get("message") or "Message not found"))
-
-    message_thread = td_manager.request(
-        account_key,
-        {
-            "@type": "getMessageThread",
-            "chat_id": chat_id,
-            "message_id": message_id,
-        },
-        timeout_seconds=15.0,
-    )
-    if str(message_thread.get("@type") or "") == "error":
-        message_thread = {}
-
-    extracted = _extract_td_message_file(message_result)
-    if extracted is None:
-        raise RuntimeError("This message doesn't contain a downloadable file.")
-
-    td_file = extracted["file"]
-    target_file_id = _int_or_default(td_file.get("id"), 0)
-    if target_file_id == 0:
-        raise RuntimeError("Invalid TDLib file id")
-
-    if file_id != 0 and target_file_id != file_id:
-        target_file_id = file_id
-
-    start_result = td_manager.request(
-        account_key,
-        {
-            "@type": "addFileToDownloads",
-            "file_id": target_file_id,
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "priority": 32,
-        },
-        timeout_seconds=25.0,
-    )
-    if str(start_result.get("@type") or "") == "error":
-        fallback = td_manager.request(
-            account_key,
-            {
-                "@type": "downloadFile",
-                "file_id": target_file_id,
-                "priority": 16,
-                "offset": 0,
-                "limit": 0,
-                "synchronous": False,
-            },
-            timeout_seconds=25.0,
-        )
-        if str(fallback.get("@type") or "") == "error":
-            raise RuntimeError(
-                str(
-                    fallback.get("message")
-                    or start_result.get("message")
-                    or "Failed to start download"
-                )
-            )
-
-    download_result = td_manager.request(
-        account_key,
-        {
-            "@type": "getFile",
-            "file_id": target_file_id,
-        },
-        timeout_seconds=15.0,
-    )
-    if str(download_result.get("@type") or "") == "error":
-        download_result = {"@type": "ok"}
-
-    file_payload = _td_message_to_file(telegram_id, message_result)
-    if file_payload is None:
-        raise RuntimeError("Failed to map TDLib file payload")
-
-    file_payload["threadChatId"] = _int_or_default(message_thread.get("chat_id"), 0)
-    file_payload["messageThreadId"] = _int_or_default(
-        message_thread.get("message_thread_id"),
-        _int_or_default(file_payload.get("messageThreadId"), 0),
-    )
-
-    if str(download_result.get("@type") or "") == "file":
-        local = (
-            download_result.get("local")
-            if isinstance(download_result.get("local"), dict)
-            else {}
-        )
-        is_completed = bool(local.get("is_downloading_completed"))
-        is_downloading = bool(local.get("is_downloading_active"))
-        file_payload["downloadedSize"] = _int_or_default(
-            local.get("downloaded_size"), file_payload.get("downloadedSize")
-        )
-        file_payload["downloadStatus"] = (
-            "completed"
-            if is_completed
-            else ("downloading" if is_downloading else "downloading")
-        )
-        if is_completed:
-            file_payload["localPath"] = str(local.get("path") or "")
-            file_payload["completionDate"] = int(time.time() * 1000)
-    else:
-        file_payload["downloadStatus"] = "downloading"
-
-    remote_raw = (
-        td_file.get("remote") if isinstance(td_file.get("remote"), dict) else {}
-    )
-    remote_unique_id = str(remote_raw.get("unique_id") or "").strip()
-    payload_unique_id = str(file_payload.get("uniqueId") or "").strip()
-    mime_type = str(file_payload.get("mimeType") or "").strip()
-    local_path = str(file_payload.get("localPath") or "").strip()
-
-    if remote_unique_id:
-        _cache_tdlib_file_preview(
-            telegram_id=telegram_id,
-            unique_id=remote_unique_id,
-            file_id=target_file_id,
-            mime_type=mime_type,
-            local_path=local_path or None,
-        )
-    if payload_unique_id and payload_unique_id != remote_unique_id:
-        _cache_tdlib_file_preview(
-            telegram_id=telegram_id,
-            unique_id=payload_unique_id,
-            file_id=target_file_id,
-            mime_type=mime_type,
-            local_path=local_path or None,
-        )
-
-    return file_payload
-
-
-def _enrich_tdlib_thumbnails_for_files(
-    db: sqlite3.Connection,
-    td_manager: TdlibAuthManager,
-    *,
-    telegram_id: int,
-    root_path: str,
-    files: list[dict[str, Any]],
-) -> bool:
-    if not files:
-        return False
-    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
-        return False
-
-    account_key = str(telegram_id)
-    changed = False
-
-    for file_item in files:
-        if not isinstance(file_item, dict):
-            continue
-        if isinstance(file_item.get("thumbnailFile"), dict):
-            continue
-
-        chat_id = _int_or_default(file_item.get("chatId"), 0)
-        message_id = _int_or_default(file_item.get("messageId"), 0)
-        if chat_id == 0 or message_id == 0:
-            continue
-
-        message_result = td_manager.request(
-            account_key,
-            {
-                "@type": "getMessage",
-                "chat_id": chat_id,
-                "message_id": message_id,
-            },
-            timeout_seconds=12.0,
-        )
-        if str(message_result.get("@type") or "") == "error":
-            continue
-
-        mapped = _td_message_to_file(telegram_id, message_result)
-        if mapped is None:
-            continue
-
-        thumbnail_payload = (
-            mapped.get("thumbnailFile")
-            if isinstance(mapped.get("thumbnailFile"), dict)
-            else None
-        )
-        if thumbnail_payload is None:
-            continue
-
-        thumbnail_file_id = _int_or_default(thumbnail_payload.get("id"), 0)
-        thumbnail_path = str(thumbnail_payload.get("localPath") or "").strip()
-        if thumbnail_file_id > 0 and not thumbnail_path:
-            download_result = td_manager.request(
-                account_key,
-                {
-                    "@type": "downloadFile",
-                    "file_id": thumbnail_file_id,
-                    "priority": 1,
-                    "offset": 0,
-                    "limit": 0,
-                    "synchronous": True,
-                },
-                timeout_seconds=15.0,
-            )
-            if str(download_result.get("@type") or "") == "file":
-                local = (
-                    download_result.get("local")
-                    if isinstance(download_result.get("local"), dict)
-                    else {}
-                )
-                if bool(local.get("is_downloading_completed")):
-                    resolved_path = str(local.get("path") or "").strip()
-                    if resolved_path:
-                        thumbnail_payload["localPath"] = resolved_path
-                        thumbnail_payload["downloadStatus"] = "completed"
-                        thumbnail_payload["downloadedSize"] = _int_or_default(
-                            local.get("downloaded_size"),
-                            _int_or_default(thumbnail_payload.get("downloadedSize"), 0),
-                        )
-                        thumbnail_payload["size"] = max(
-                            _int_or_default(download_result.get("size"), 0),
-                            _int_or_default(download_result.get("expected_size"), 0),
-                            _int_or_default(thumbnail_payload.get("size"), 0),
-                        )
-
-        current_unique_id = str(file_item.get("uniqueId") or "").strip()
-        mapped_unique_id = str(mapped.get("uniqueId") or "").strip()
-        if current_unique_id and current_unique_id != mapped_unique_id:
-            mapped["uniqueId"] = current_unique_id
-
-        _db_upsert_tdlib_file_record(db, file_payload=mapped)
-        changed = True
-
-    return changed
 
 
 def _int_or_default(value: Any, default: int = 0) -> int:
@@ -4274,6 +1950,7 @@ async def telegram_files(
                                 )
                                 if isinstance(item, dict)
                             ],
+                            upsert_file_record=_db_upsert_tdlib_file_record,
                         )
                         if changed:
                             return list_files(
