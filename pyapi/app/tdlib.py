@@ -25,11 +25,19 @@ def _tdjson_library_candidates(shared_lib_path: str | None) -> list[str]:
         candidates.append(shared_lib_path)
 
     if os.name == "nt":
-        candidates.extend(["tdjson.dll", "libtdjson.dll"])
+        candidates.extend(["tdjson.dll", "libtdjson.dll", "tdjni.dll", "libtdjni.dll"])
     elif os.name == "posix":
-        candidates.extend(["libtdjson.so", "libtdjson.dylib", "tdjson"])
+        candidates.extend(
+            [
+                "libtdjson.so",
+                "libtdjson.dylib",
+                "libtdjni.so",
+                "libtdjni.dylib",
+                "tdjson",
+            ]
+        )
     else:
-        candidates.append("tdjson")
+        candidates.extend(["tdjson", "tdjni"])
 
     return candidates
 

@@ -7,15 +7,15 @@ PUID=${PUID:-0}
 PGID=${PGID:-0}
 
 # Store PIDs in variables
-JAVA_PID=""
+BACKEND_PID=""
 NGINX_PID=""
 
 cleanup() {
     echo "Cleaning up processes..."
 
     # Check and kill each process individually
-    if [ -n "$JAVA_PID" ]; then
-        kill -TERM "$JAVA_PID" 2>/dev/null || true
+    if [ -n "$BACKEND_PID" ]; then
+        kill -TERM "$BACKEND_PID" 2>/dev/null || true
     fi
     if [ -n "$NGINX_PID" ]; then
         kill -TERM "$NGINX_PID" 2>/dev/null || true
@@ -39,13 +39,13 @@ start_services() {
         cmd_prefix="su-exec ${PUID}:${PGID}"
     fi
 
-    echo "Starting Java service..."
+    echo "Starting Python service..."
     if [ -n "$cmd_prefix" ]; then
-        $cmd_prefix java -jar -Djava.library.path=/app/tdlib /app/api.jar &
+        $cmd_prefix python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --app-dir /app/pyapi &
     else
-        java -jar -Djava.library.path=/app/tdlib /app/api.jar &
+        python -m uvicorn app.main:app --host 0.0.0.0 --port 8080 --app-dir /app/pyapi &
     fi
-    JAVA_PID=$!
+    BACKEND_PID=$!
 
     echo "Starting Nginx service..."
     if [ -n "$cmd_prefix" ]; then
