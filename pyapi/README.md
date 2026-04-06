@@ -65,6 +65,10 @@ On Windows PowerShell, replace `.venv/bin/python` with `.venv\\Scripts\\python.e
 - `TELEGRAM_API_HASH` (required for real TDLib login)
 - `TELEGRAM_LOG_LEVEL` (default: `1`)
 - `TDLIB_SHARED_LIB` (optional absolute path to `tdjson` shared library)
+- `OPENAI_API_KEY` (required when using `GROUP_BY_AI` auto transfer)
+- `OPENAI_MODEL` (default: `gpt-4o-mini`)
+- `OPENAI_BASE_URL` (optional, default: `https://api.openai.com/v1`)
+- `OPENAI_TIMEOUT_SECONDS` (optional, default: `30`)
 
 If `TDLIB_SHARED_LIB` is not set, backend will try system `tdjson` library names. If that fails,
 it will fall back to Python package `tdjson` when available in the runtime environment.
@@ -72,5 +76,6 @@ it will fall back to Python package `tdjson` when available in the runtime envir
 ## Notes
 
 - This phase is intentionally API-compatible for settings, account metadata, and offline file routes.
+- Auto transfer supports `DIRECT`, `GROUP_BY_CHAT`, `GROUP_BY_TYPE`, and `GROUP_BY_AI`.
 - WebSocket `/ws` emits authorization and method-result events for TDLib login when TDLib is configured.
 - Remaining route handlers are registered so clients receive explicit `501` responses instead of `404`.

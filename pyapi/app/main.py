@@ -1179,6 +1179,13 @@ def _db_update_tdlib_file_status(
     )
     db.commit()
 
+    if download_status.strip().lower() == "completed" and local_path.strip():
+        _queue_transfer_for_completed_file(
+            db,
+            telegram_id=telegram_id,
+            unique_id=resolved_unique,
+        )
+
 
 def _db_count_downloading_files(db: sqlite3.Connection, telegram_id: int) -> int:
     row = db.execute(
@@ -1244,6 +1251,57 @@ def _db_file_for_transfer(
         """,
         (telegram_id, unique_id),
     ).fetchone()
+
+
+def _queue_transfer_for_completed_file(
+    db: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    unique_id: str,
+) -> None:
+    if telegram_id <= 0 or not unique_id:
+        return
+
+    row = _db_file_for_transfer(
+        db,
+        telegram_id=telegram_id,
+        unique_id=unique_id,
+    )
+    if row is None:
+        return
+
+    if str(row["download_status"] or "").strip().lower() != "completed":
+        return
+    if str(row["transfer_status"] or "idle").strip().lower() != "idle":
+        return
+    if not str(row["local_path"] or "").strip():
+        return
+
+    chat_id = _int_or_default(row["chat_id"], 0)
+    if chat_id == 0:
+        return
+
+    automations = get_automation_map(db, telegram_id=telegram_id)
+    automation = automations.get((telegram_id, chat_id))
+    if not isinstance(automation, dict):
+        return
+
+    transfer_cfg = automation.get("transfer")
+    if not isinstance(transfer_cfg, dict) or not bool(transfer_cfg.get("enabled")):
+        return
+
+    rule = transfer_cfg.get("rule")
+    if not isinstance(rule, dict) or not str(rule.get("destination") or "").strip():
+        return
+
+    _queue_transfer_candidate(
+        {
+            "id": _int_or_default(row["id"], 0),
+            "uniqueId": unique_id,
+            "telegramId": telegram_id,
+            "chatId": chat_id,
+        }
+    )
 
 
 def _db_update_transfer_status(
