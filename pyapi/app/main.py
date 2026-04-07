@@ -1015,8 +1015,7 @@ async def telegram_files(
     if _int_or_default(db_result.get("size"), 0) > 0:
         has_search = bool((filters.get("search") or "").strip())
         can_try_enrichment = (
-            _int_or_default(filters.get("fromMessageId"), 0) == 0
-            and not has_search
+            _int_or_default(filters.get("fromMessageId"), 0) == 0 and not has_search
         )
         if can_try_enrichment:
             td_manager = _tdlib_manager_from_app(request.app)
@@ -1665,6 +1664,12 @@ async def files_start_download_multiple(
                 file_id=_int_or_default(file_record.get("id"), item["fileId"]),
                 unique_id=str(file_record.get("uniqueId") or ""),
             )
+
+    if processed == 0 and failed > 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to start download for the selected files.",
+        )
 
     return {
         "processed": processed,

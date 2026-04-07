@@ -33,6 +33,11 @@ interface FileBatchControlProps {
   ) => Promise<void>;
 }
 
+type BatchActionResponse = {
+  processed?: number;
+  failed?: number;
+};
+
 export default function FileBatchControl({
   selectedFiles,
   setSelectedFiles,
@@ -45,7 +50,7 @@ export default function FileBatchControl({
 
   // Calculate counts for different file states
   const downloadableCounts = selectedFileObjects.filter(
-    (file) => file.downloadStatus === "idle",
+    (file) => file.downloadStatus === "idle" || file.downloadStatus === "error",
   ).length;
   const pausableCounts = selectedFileObjects.filter(
     (file) => file.downloadStatus === "downloading",
@@ -67,7 +72,8 @@ export default function FileBatchControl({
       label: "Download",
       tooltip: `Download ${downloadableCounts} selected files`,
       icon: <Download className="mr-2 h-4 w-4" />,
-      filter: (file: TelegramFile) => file.downloadStatus === "idle",
+      filter: (file: TelegramFile) =>
+        file.downloadStatus === "idle" || file.downloadStatus === "error",
       validCount: downloadableCounts,
       showConfirm: downloadableCounts > 5,
     },
@@ -219,41 +225,63 @@ function ControlButton({
             messageId: number;
             fileId: number;
             uniqueId: string;
-          }>;
+          }>; 
         } & Record<string, any>;
       },
     ) => POST(key, arg),
-    {
-      onSuccess: () => {
-        setSelectedFiles(new Set());
-        toast({
-          title: `${label} action completed`,
-          description: `Successfully processed ${validFiles.length} files.`,
-          variant: "success",
-        });
-      },
-    },
   );
 
-  const handleAction = () => {
-    void trigger({
-      files: validFiles.map((file) => ({
-        telegramId: file.telegramId ?? 0,
-        chatId: file.chatId ?? 0,
-        messageId: file.messageId ?? 0,
-        fileId: file.id ?? 0,
-        uniqueId: file.uniqueId,
-      })),
-      ...extra,
-    });
-    setConfirmDialogOpen(false);
+  const handleAction = async () => {
+    try {
+      const result = (await trigger({
+        files: validFiles.map((file) => ({
+          telegramId: file.telegramId ?? 0,
+          chatId: file.chatId ?? 0,
+          messageId: file.messageId ?? 0,
+          fileId: file.id ?? 0,
+          uniqueId: file.uniqueId,
+        })),
+        ...extra,
+      })) as BatchActionResponse | undefined;
+
+      const processed = Math.max(0, Number(result?.processed ?? validFiles.length));
+      const failed = Math.max(0, Number(result?.failed ?? 0));
+
+      if (processed === 0 && failed > 0) {
+        toast({
+          title: `${label} failed`,
+          description: "None of the selected files could be processed.",
+          variant: "error",
+        });
+        return;
+      }
+
+      setSelectedFiles(new Set());
+
+      if (failed > 0) {
+        toast({
+          title: `${label} completed with skips`,
+          description: `Processed ${processed} files and skipped ${failed}.`,
+          variant: "warning",
+        });
+        return;
+      }
+
+      toast({
+        title: `${label} action completed`,
+        description: `Successfully processed ${processed} files.`,
+        variant: "success",
+      });
+    } finally {
+      setConfirmDialogOpen(false);
+    }
   };
 
   const handleClick = () => {
     if (showConfirm) {
       setConfirmDialogOpen(true);
     } else {
-      handleAction();
+      void handleAction();
     }
   };
 
@@ -379,7 +407,9 @@ function ControlButton({
               </Button>
             </DialogClose>
             <Button
-              onClick={handleAction}
+              onClick={() => {
+                void handleAction();
+              }}
               className={`min-w-24 ${
                 label === "Delete" || label === "Cancel"
                   ? "bg-red-500 text-white hover:bg-red-600"
