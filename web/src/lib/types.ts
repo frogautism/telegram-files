@@ -13,12 +13,17 @@ export type TelegramAccount = {
 
 export type TelegramChat = {
   id: string;
+  kind?: "chat" | "group";
+  groupId?: string;
+  telegramId?: string;
   name: string;
   type: "private" | "group" | "channel";
   avatar?: string;
   unreadCount?: number;
   lastMessage?: string;
   lastMessageTime?: string;
+  chatIds?: string[];
+  memberCount?: number;
   auto?: Auto & {
     state: number;
   };

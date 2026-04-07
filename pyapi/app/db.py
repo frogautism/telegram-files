@@ -44,6 +44,16 @@ def init_schema(conn: sqlite3.Connection) -> None:
             proxy      VARCHAR(255)
         );
 
+        CREATE TABLE IF NOT EXISTS chat_group_record
+        (
+            id            VARCHAR(255) PRIMARY KEY,
+            telegram_id   BIGINT      NOT NULL,
+            name          VARCHAR(255) NOT NULL,
+            chat_ids      TEXT        NOT NULL,
+            auto_settings TEXT,
+            created_at    BIGINT      NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS file_record
         (
             id                    INT,
@@ -91,6 +101,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_file_record_unique
             ON file_record (telegram_id, unique_id);
+
+        CREATE INDEX IF NOT EXISTS idx_chat_group_record_telegram
+            ON chat_group_record (telegram_id, created_at DESC);
         """
     )
     conn.commit()
@@ -267,6 +280,7 @@ def list_files(
     *,
     telegram_id: int | None,
     chat_id: int,
+    chat_ids: list[int] | None = None,
     filters: dict[str, str],
 ) -> dict[str, Any]:
     where_clauses = ["type != 'thumbnail'"]
@@ -276,7 +290,12 @@ def list_files(
         where_clauses.append("telegram_id = ?")
         params.append(telegram_id)
 
-    if chat_id not in (0, -1):
+    normalized_chat_ids = sorted({chat for chat in (chat_ids or []) if chat != 0})
+    if normalized_chat_ids:
+        placeholders = ", ".join(["?"] * len(normalized_chat_ids))
+        where_clauses.append(f"chat_id IN ({placeholders})")
+        params.extend(normalized_chat_ids)
+    elif chat_id not in (0, -1):
         where_clauses.append("chat_id = ?")
         params.append(chat_id)
 
@@ -480,6 +499,7 @@ def count_files_by_type(
     *,
     telegram_id: int,
     chat_id: int,
+    chat_ids: list[int] | None = None,
 ) -> dict[str, int]:
     where_clauses = ["type != 'thumbnail'"]
     params: list[Any] = []
@@ -488,7 +508,12 @@ def count_files_by_type(
         where_clauses.append("telegram_id = ?")
         params.append(telegram_id)
 
-    if chat_id != -1:
+    normalized_chat_ids = sorted({chat for chat in (chat_ids or []) if chat != 0})
+    if normalized_chat_ids:
+        placeholders = ", ".join(["?"] * len(normalized_chat_ids))
+        where_clauses.append(f"chat_id IN ({placeholders})")
+        params.extend(normalized_chat_ids)
+    elif chat_id != -1:
         where_clauses.append("chat_id = ?")
         params.append(chat_id)
 
@@ -973,6 +998,414 @@ def get_automation_map(
     }
 
 
+def _normalize_chat_group_name(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _normalize_chat_group_chat_ids(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+
+    result: list[int] = []
+    seen: set[int] = set()
+    for item in value:
+        chat_id = _safe_int(item, 0)
+        if chat_id == 0 or chat_id in seen:
+            continue
+        seen.add(chat_id)
+        result.append(chat_id)
+    return result
+
+
+def _default_chat_group_progress() -> dict[str, Any]:
+    return {
+        "state": 0,
+        "preload": {"nextFromMessageId": 0},
+        "download": {"nextFileType": "", "nextFromMessageId": 0},
+    }
+
+
+def _coerce_chat_group_auto_settings(
+    auto_payload: Any,
+    *,
+    chat_ids: list[int],
+) -> dict[str, Any]:
+    merged = _deep_merge_dict(
+        _default_auto_settings(),
+        deepcopy(auto_payload) if isinstance(auto_payload, dict) else {},
+    )
+
+    progress_map_raw = (
+        merged.get("progressByChat")
+        if isinstance(merged.get("progressByChat"), dict)
+        else {}
+    )
+    progress_map: dict[str, Any] = {}
+    aggregate_state = 0
+
+    for bit in (1, 2, 3, 4):
+        if chat_ids and all(
+            (
+                _safe_int(
+                    (
+                        progress_map_raw.get(str(chat_id), {}).get("state")
+                        if isinstance(progress_map_raw.get(str(chat_id)), dict)
+                        else 0
+                    ),
+                    0,
+                )
+                & (1 << bit)
+            )
+            != 0
+            for chat_id in chat_ids
+        ):
+            aggregate_state |= 1 << bit
+
+    for chat_id in chat_ids:
+        raw_progress = progress_map_raw.get(str(chat_id))
+        progress = _deep_merge_dict(
+            _default_chat_group_progress(),
+            deepcopy(raw_progress) if isinstance(raw_progress, dict) else {},
+        )
+        progress["state"] = _safe_int(progress.get("state"), 0)
+        progress_map[str(chat_id)] = progress
+
+    merged["progressByChat"] = progress_map
+    merged["state"] = aggregate_state
+    return merged
+
+
+def _serialize_chat_group_row(row: sqlite3.Row) -> dict[str, Any]:
+    group_id = str(row["id"] or "").strip()
+    raw_chat_ids = str(row["chat_ids"] or "[]").strip()
+    try:
+        parsed_chat_ids = json.loads(raw_chat_ids) if raw_chat_ids else []
+    except json.JSONDecodeError:
+        parsed_chat_ids = []
+    chat_ids = _normalize_chat_group_chat_ids(parsed_chat_ids)
+
+    raw_auto = None
+    auto_text = str(row["auto_settings"] or "").strip()
+    if auto_text:
+        try:
+            raw_auto = json.loads(auto_text)
+        except json.JSONDecodeError:
+            raw_auto = None
+
+    auto = _coerce_chat_group_auto_settings(raw_auto, chat_ids=chat_ids)
+    return {
+        "id": f"group:{group_id}",
+        "groupId": group_id,
+        "telegramId": str(_safe_int(row["telegram_id"])),
+        "kind": "group",
+        "name": _normalize_chat_group_name(row["name"]),
+        "type": "group",
+        "avatar": "",
+        "unreadCount": 0,
+        "lastMessage": "",
+        "lastMessageTime": "",
+        "chatIds": [str(chat_id) for chat_id in chat_ids],
+        "memberCount": len(chat_ids),
+        "auto": auto,
+        "createdAt": _safe_int(row["created_at"]),
+    }
+
+
+def _find_chat_group_row(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    group_id: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT *
+        FROM chat_group_record
+        WHERE telegram_id = ? AND id = ?
+        LIMIT 1
+        """,
+        (telegram_id, group_id),
+    ).fetchone()
+
+
+def get_chat_group(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    group_id: str,
+) -> dict[str, Any] | None:
+    row = _find_chat_group_row(conn, telegram_id=telegram_id, group_id=group_id)
+    if row is None:
+        return None
+    return _serialize_chat_group_row(row)
+
+
+def list_chat_groups(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    query: str,
+    activated_group_id: str | None,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM chat_group_record
+        WHERE telegram_id = ?
+        ORDER BY created_at DESC, name COLLATE NOCASE ASC
+        """,
+        (telegram_id,),
+    ).fetchall()
+
+    normalized_query = query.strip().lower()
+    groups: list[dict[str, Any]] = []
+    activated_group = None
+    for row in rows:
+        serialized = _serialize_chat_group_row(row)
+        if activated_group_id and serialized["groupId"] == activated_group_id:
+            activated_group = serialized
+        if normalized_query and normalized_query not in serialized["name"].lower():
+            continue
+        groups.append(serialized)
+
+    if activated_group is not None and not any(
+        item["groupId"] == activated_group_id for item in groups
+    ):
+        groups.insert(0, activated_group)
+    return groups
+
+
+def list_chat_group_automations(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int | None = None,
+) -> list[dict[str, Any]]:
+    query = "SELECT * FROM chat_group_record"
+    params: list[Any] = []
+    if telegram_id is not None:
+        query += " WHERE telegram_id = ?"
+        params.append(telegram_id)
+    query += " ORDER BY created_at ASC, name COLLATE NOCASE ASC"
+
+    rows = conn.execute(query, params).fetchall()
+    return [_serialize_chat_group_row(row) for row in rows]
+
+
+def _chat_group_name_exists(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    name: str,
+    exclude_group_id: str | None = None,
+) -> bool:
+    rows = conn.execute(
+        "SELECT id, name FROM chat_group_record WHERE telegram_id = ?",
+        (telegram_id,),
+    ).fetchall()
+    normalized_name = name.lower()
+    for row in rows:
+        current_id = str(row["id"] or "").strip()
+        if exclude_group_id is not None and current_id == exclude_group_id:
+            continue
+        if str(row["name"] or "").strip().lower() == normalized_name:
+            return True
+    return False
+
+
+def _chat_group_members_overlap(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    chat_ids: list[int],
+    exclude_group_id: str | None = None,
+) -> str | None:
+    if not chat_ids:
+        return None
+
+    target = set(chat_ids)
+    rows = conn.execute(
+        "SELECT id, name, chat_ids FROM chat_group_record WHERE telegram_id = ?",
+        (telegram_id,),
+    ).fetchall()
+    for row in rows:
+        current_id = str(row["id"] or "").strip()
+        if exclude_group_id is not None and current_id == exclude_group_id:
+            continue
+        raw_chat_ids = str(row["chat_ids"] or "[]").strip()
+        try:
+            parsed = json.loads(raw_chat_ids) if raw_chat_ids else []
+        except json.JSONDecodeError:
+            parsed = []
+        existing = set(_normalize_chat_group_chat_ids(parsed))
+        if target & existing:
+            return _normalize_chat_group_name(row["name"])
+    return None
+
+
+def create_chat_group(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    group_id: str,
+    name: str,
+    chat_ids: list[int],
+) -> dict[str, Any]:
+    normalized_name = _normalize_chat_group_name(name)
+    normalized_chat_ids = _normalize_chat_group_chat_ids(chat_ids)
+    if not normalized_name:
+        raise ValueError("Group name is required.")
+    if len(normalized_chat_ids) < 2:
+        raise ValueError("A group chat must contain at least 2 chats.")
+    if _chat_group_name_exists(conn, telegram_id=telegram_id, name=normalized_name):
+        raise ValueError("A group chat with this name already exists.")
+
+    overlap_group = _chat_group_members_overlap(
+        conn,
+        telegram_id=telegram_id,
+        chat_ids=normalized_chat_ids,
+    )
+    if overlap_group is not None:
+        raise ValueError(f"One or more chats already belong to '{overlap_group}'.")
+
+    created_at = int(time.time() * 1000)
+    auto_payload = json.dumps(_default_auto_settings(), separators=(",", ":"))
+    conn.execute(
+        """
+        INSERT INTO chat_group_record(id, telegram_id, name, chat_ids, auto_settings, created_at)
+        VALUES(?, ?, ?, ?, ?, ?)
+        """,
+        (
+            group_id,
+            telegram_id,
+            normalized_name,
+            json.dumps(normalized_chat_ids, separators=(",", ":")),
+            auto_payload,
+            created_at,
+        ),
+    )
+    conn.commit()
+
+    created = get_chat_group(conn, telegram_id=telegram_id, group_id=group_id)
+    if created is None:
+        raise ValueError("Failed to create group chat.")
+    return created
+
+
+def update_chat_group(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    group_id: str,
+    name: str,
+    chat_ids: list[int],
+) -> dict[str, Any] | None:
+    existing = _find_chat_group_row(conn, telegram_id=telegram_id, group_id=group_id)
+    if existing is None:
+        return None
+
+    normalized_name = _normalize_chat_group_name(name)
+    normalized_chat_ids = _normalize_chat_group_chat_ids(chat_ids)
+    if not normalized_name:
+        raise ValueError("Group name is required.")
+    if len(normalized_chat_ids) < 2:
+        raise ValueError("A group chat must contain at least 2 chats.")
+    if _chat_group_name_exists(
+        conn,
+        telegram_id=telegram_id,
+        name=normalized_name,
+        exclude_group_id=group_id,
+    ):
+        raise ValueError("A group chat with this name already exists.")
+
+    overlap_group = _chat_group_members_overlap(
+        conn,
+        telegram_id=telegram_id,
+        chat_ids=normalized_chat_ids,
+        exclude_group_id=group_id,
+    )
+    if overlap_group is not None:
+        raise ValueError(f"One or more chats already belong to '{overlap_group}'.")
+
+    conn.execute(
+        """
+        UPDATE chat_group_record
+        SET name = ?,
+            chat_ids = ?
+        WHERE telegram_id = ? AND id = ?
+        """,
+        (
+            normalized_name,
+            json.dumps(normalized_chat_ids, separators=(",", ":")),
+            telegram_id,
+            group_id,
+        ),
+    )
+    conn.commit()
+    return get_chat_group(conn, telegram_id=telegram_id, group_id=group_id)
+
+
+def delete_chat_group(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    group_id: str,
+) -> None:
+    conn.execute(
+        "DELETE FROM chat_group_record WHERE telegram_id = ? AND id = ?",
+        (telegram_id, group_id),
+    )
+    conn.commit()
+
+
+def update_chat_group_auto_settings(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    group_id: str,
+    auto_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    existing = _find_chat_group_row(conn, telegram_id=telegram_id, group_id=group_id)
+    if existing is None:
+        return None
+
+    payload = auto_payload if isinstance(auto_payload, dict) else {}
+    conn.execute(
+        """
+        UPDATE chat_group_record
+        SET auto_settings = ?
+        WHERE telegram_id = ? AND id = ?
+        """,
+        (
+            json.dumps(payload, separators=(",", ":"), ensure_ascii=False),
+            telegram_id,
+            group_id,
+        ),
+    )
+    conn.commit()
+    return get_chat_group(conn, telegram_id=telegram_id, group_id=group_id)
+
+
+def find_chat_group_for_chat(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    chat_id: int,
+) -> dict[str, Any] | None:
+    if telegram_id <= 0 or chat_id == 0:
+        return None
+
+    for group in list_chat_group_automations(conn, telegram_id=telegram_id):
+        raw_chat_ids = group.get("chatIds")
+        chat_ids = (
+            {_safe_int(item, 0) for item in raw_chat_ids}
+            if isinstance(raw_chat_ids, list)
+            else set()
+        )
+        if chat_id in chat_ids:
+            return group
+    return None
+
+
 def list_telegrams(
     conn: sqlite3.Connection, app_root: str, authorized: bool | None
 ) -> list[dict[str, Any]]:
@@ -1129,6 +1562,7 @@ def list_chats(
         chats.append(
             {
                 "id": str(chat_id),
+                "kind": "chat",
                 "name": chat_name,
                 "type": "channel",
                 "avatar": "",
@@ -1162,6 +1596,7 @@ def list_chats(
                 0,
                 {
                     "id": str(activated_chat_id),
+                    "kind": "chat",
                     "name": str(activated_chat_id),
                     "type": "channel",
                     "avatar": "",

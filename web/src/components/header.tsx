@@ -31,10 +31,7 @@ export function Header() {
     <div className="sticky top-0 z-20 mb-4 border-b border-border bg-background">
       <div className="flex flex-col gap-3 py-3">
         <div className="flex items-center justify-between gap-4">
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2"
-          >
+          <Link href="/" className="inline-flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-[4px] bg-foreground text-background">
               <TelegramIcon className="h-4 w-4" />
             </div>
@@ -79,8 +76,10 @@ export function Header() {
         <div className="grid gap-2 xl:grid-cols-[240px_minmax(320px,420px)_auto]">
           <AccountSelect {...useTelegramAccountProps} />
           <ChatSelect disabled={!useTelegramAccountProps.accountId} />
-          <div className="flex items-center justify-between gap-2 border border-border rounded-[4px] px-3 py-2 text-sm text-muted-foreground">
-            <span>{messageThreadId ? "Thread board" : "Browse by chat"}</span>
+          <div className="flex items-center justify-between gap-2 rounded-[4px] border border-border px-3 py-2 text-sm text-muted-foreground">
+            <span>
+              {messageThreadId ? "Thread board" : "Browse chats or groups"}
+            </span>
             {!messageThreadId && <AutomationDialog />}
           </div>
         </div>

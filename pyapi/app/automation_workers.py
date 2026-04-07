@@ -13,7 +13,13 @@ from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI
 
-from .db import get_automation_map, get_settings_by_keys, update_auto_settings
+from .db import (
+    get_automation_map,
+    get_settings_by_keys,
+    list_chat_group_automations,
+    update_auto_settings,
+    update_chat_group_auto_settings,
+)
 from .file_record_ops import (
     count_downloading_files as _db_count_downloading_files,
     file_for_transfer as _db_file_for_transfer,
@@ -180,6 +186,84 @@ def _persist_automation(
         chat_id=chat_id,
         auto_payload=deepcopy(automation),
     )
+
+
+def _persist_group_automation(
+    db: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    group_id: str,
+    automation: dict[str, Any],
+) -> None:
+    update_chat_group_auto_settings(
+        db,
+        telegram_id=telegram_id,
+        group_id=group_id,
+        auto_payload=deepcopy(automation),
+    )
+
+
+def _group_member_progress(
+    automation: dict[str, Any],
+    *,
+    chat_id: int,
+) -> dict[str, Any]:
+    progress_map = automation.setdefault("progressByChat", {})
+    if not isinstance(progress_map, dict):
+        progress_map = {}
+        automation["progressByChat"] = progress_map
+
+    progress = progress_map.get(str(chat_id))
+    if not isinstance(progress, dict):
+        progress = {
+            "state": 0,
+            "preload": {"nextFromMessageId": 0},
+            "download": {"nextFileType": "", "nextFromMessageId": 0},
+        }
+        progress_map[str(chat_id)] = progress
+
+    progress.setdefault("preload", {})
+    progress.setdefault("download", {})
+    progress["state"] = _int_or_default(progress.get("state"), 0)
+    return progress
+
+
+def _group_chat_ids(group: dict[str, Any]) -> list[int]:
+    raw_chat_ids = group.get("chatIds") if isinstance(group, dict) else None
+    if not isinstance(raw_chat_ids, list):
+        return []
+
+    result: list[int] = []
+    seen: set[int] = set()
+    for item in raw_chat_ids:
+        chat_id = _int_or_default(item, 0)
+        if chat_id == 0 or chat_id in seen:
+            continue
+        seen.add(chat_id)
+        result.append(chat_id)
+    return result
+
+
+def _resolve_effective_automation_for_chat(
+    *,
+    telegram_id: int,
+    chat_id: int,
+    direct_automations: dict[tuple[int, int], dict[str, Any]],
+    group_automations: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    direct = direct_automations.get((telegram_id, chat_id))
+    if isinstance(direct, dict):
+        return direct
+
+    for group in group_automations:
+        if _int_or_default(group.get("telegramId"), telegram_id) != telegram_id:
+            continue
+        if chat_id not in _group_chat_ids(group):
+            continue
+        auto = group.get("auto")
+        if isinstance(auto, dict):
+            return auto
+    return None
 
 
 def _normalized_download_file_types(rule: dict[str, Any]) -> list[str]:
@@ -576,7 +660,8 @@ async def _run_preload_scan_cycle(app: FastAPI, deps: WorkerDeps) -> None:
 
     db: sqlite3.Connection = app.state.db
     automations = get_automation_map(db)
-    if not automations:
+    group_automations = list_chat_group_automations(db)
+    if not automations and not group_automations:
         return
 
     root_path_cache: dict[int, str | None] = {}
@@ -642,6 +727,82 @@ async def _run_preload_scan_cycle(app: FastAPI, deps: WorkerDeps) -> None:
             automation=automation,
         )
 
+    for group in group_automations:
+        telegram_id = _int_or_default(group.get("telegramId"), 0)
+        group_id = str(group.get("groupId") or "").strip()
+        automation = group.get("auto") if isinstance(group.get("auto"), dict) else None
+        if telegram_id <= 0 or not group_id or not isinstance(automation, dict):
+            continue
+
+        preload_cfg = (
+            automation.get("preload") if isinstance(automation, dict) else None
+        )
+        if not isinstance(preload_cfg, dict) or not bool(preload_cfg.get("enabled")):
+            continue
+
+        root_path = deps.tdlib_account_root_path(app, db, telegram_id, root_path_cache)
+        if root_path is None:
+            continue
+
+        for chat_id in _group_chat_ids(group):
+            if (telegram_id, chat_id) in automations:
+                continue
+
+            progress = _group_member_progress(automation, chat_id=chat_id)
+            state = _int_or_default(progress.get("state"), 0)
+            if _state_is_enabled(state, HISTORY_PRELOAD_STATE):
+                continue
+
+            cursor = _int_or_default(
+                progress.get("preload", {}).get("nextFromMessageId"), 0
+            )
+            try:
+                messages = await asyncio.to_thread(
+                    _tdlib_chat_history_batch,
+                    td_manager,
+                    telegram_id=telegram_id,
+                    root_path=root_path,
+                    chat_id=chat_id,
+                    from_message_id=cursor,
+                    limit=100,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Preload scan failed for telegram=%s group=%s chat=%s: %s",
+                    telegram_id,
+                    group_id,
+                    chat_id,
+                    exc,
+                )
+                continue
+
+            if not messages:
+                progress["state"] = _state_enable(state, HISTORY_PRELOAD_STATE)
+                _persist_group_automation(
+                    db,
+                    telegram_id=telegram_id,
+                    group_id=group_id,
+                    automation=automation,
+                )
+                continue
+
+            for message in messages:
+                file_payload = _td_message_to_file(telegram_id, message)
+                if file_payload is None:
+                    continue
+                _db_upsert_tdlib_file_record(db, file_payload=file_payload)
+
+            progress.setdefault("preload", {})["nextFromMessageId"] = _int_or_default(
+                messages[-1].get("id"),
+                cursor,
+            )
+            _persist_group_automation(
+                db,
+                telegram_id=telegram_id,
+                group_id=group_id,
+                automation=automation,
+            )
+
 
 async def _run_auto_download_scan_cycle(app: FastAPI, deps: WorkerDeps) -> None:
     db: sqlite3.Connection = app.state.db
@@ -653,7 +814,8 @@ async def _run_auto_download_scan_cycle(app: FastAPI, deps: WorkerDeps) -> None:
         return
 
     automations = get_automation_map(db)
-    if not automations:
+    group_automations = list_chat_group_automations(db)
+    if not automations and not group_automations:
         return
 
     root_path_cache: dict[int, str | None] = {}
@@ -774,6 +936,140 @@ async def _run_auto_download_scan_cycle(app: FastAPI, deps: WorkerDeps) -> None:
                 comment_scan["nextFileType"] = next_file_type
                 comment_scan["nextFromMessageId"] = next_cursor
 
+    for group in group_automations:
+        telegram_id = _int_or_default(group.get("telegramId"), 0)
+        group_id = str(group.get("groupId") or "").strip()
+        automation = group.get("auto") if isinstance(group.get("auto"), dict) else None
+        if telegram_id <= 0 or not group_id or not isinstance(automation, dict):
+            continue
+
+        download_cfg = (
+            automation.get("download") if isinstance(automation, dict) else None
+        )
+        if not isinstance(download_cfg, dict) or not bool(download_cfg.get("enabled")):
+            continue
+
+        rule = download_cfg.get("rule")
+        if not isinstance(rule, dict) or not bool(rule.get("downloadHistory", True)):
+            continue
+
+        root_path = deps.tdlib_account_root_path(app, db, telegram_id, root_path_cache)
+        if root_path is None:
+            continue
+
+        for chat_id in _group_chat_ids(group):
+            if (telegram_id, chat_id) in automations:
+                continue
+
+            progress = _group_member_progress(automation, chat_id=chat_id)
+            state = _int_or_default(progress.get("state"), 0)
+            scan_complete = _state_is_enabled(state, HISTORY_DOWNLOAD_SCAN_STATE)
+            comment_enabled = _automation_supports_comment_download(automation)
+            comment_keys = [
+                key
+                for key, item in AUTO_DOWNLOAD_COMMENT_THREADS.items()
+                if _int_or_default(item.get("telegramId"), 0) == telegram_id
+                and _int_or_default(item.get("sourceChatId"), 0) == chat_id
+                and not bool(item.get("isComplete"))
+            ]
+            has_pending_comment_scan = bool(comment_keys)
+            if scan_complete and not (comment_enabled and has_pending_comment_scan):
+                if _auto_waiting_size(telegram_id) == 0 and not _state_is_enabled(
+                    state,
+                    HISTORY_DOWNLOAD_STATE,
+                ):
+                    progress["state"] = _state_enable(state, HISTORY_DOWNLOAD_STATE)
+                    _persist_group_automation(
+                        db,
+                        telegram_id=telegram_id,
+                        group_id=group_id,
+                        automation=automation,
+                    )
+                continue
+
+            if not scan_complete:
+                (
+                    next_file_type,
+                    next_cursor,
+                    is_complete,
+                    _,
+                ) = await _scan_auto_download_scope(
+                    db=db,
+                    td_manager=td_manager,
+                    telegram_id=telegram_id,
+                    root_path=root_path,
+                    chat_id=chat_id,
+                    automation=automation,
+                    next_file_type=str(
+                        progress.get("download", {}).get("nextFileType") or ""
+                    ),
+                    next_from_message_id=_int_or_default(
+                        progress.get("download", {}).get("nextFromMessageId"),
+                        0,
+                    ),
+                    message_thread_id=0,
+                )
+
+                progress.setdefault("download", {})["nextFileType"] = next_file_type
+                progress.setdefault("download", {})["nextFromMessageId"] = next_cursor
+
+                next_state = state
+                if is_complete:
+                    next_state = _state_enable(next_state, HISTORY_DOWNLOAD_SCAN_STATE)
+                if is_complete and _auto_waiting_size(telegram_id) == 0:
+                    next_state = _state_enable(next_state, HISTORY_DOWNLOAD_STATE)
+                progress["state"] = next_state
+                _persist_group_automation(
+                    db,
+                    telegram_id=telegram_id,
+                    group_id=group_id,
+                    automation=automation,
+                )
+
+            if not comment_enabled:
+                for key in comment_keys:
+                    AUTO_DOWNLOAD_COMMENT_THREADS.pop(key, None)
+                continue
+
+            for key in comment_keys:
+                comment_scan = AUTO_DOWNLOAD_COMMENT_THREADS.get(key)
+                if not isinstance(comment_scan, dict):
+                    continue
+
+                thread_chat_id = _int_or_default(comment_scan.get("threadChatId"), 0)
+                message_thread_id = _int_or_default(
+                    comment_scan.get("messageThreadId"), 0
+                )
+                if thread_chat_id == 0 or message_thread_id == 0:
+                    AUTO_DOWNLOAD_COMMENT_THREADS.pop(key, None)
+                    continue
+
+                (
+                    next_file_type,
+                    next_cursor,
+                    comment_complete,
+                    _,
+                ) = await _scan_auto_download_scope(
+                    db=db,
+                    td_manager=td_manager,
+                    telegram_id=telegram_id,
+                    root_path=root_path,
+                    chat_id=thread_chat_id,
+                    automation=automation,
+                    next_file_type=str(comment_scan.get("nextFileType") or ""),
+                    next_from_message_id=_int_or_default(
+                        comment_scan.get("nextFromMessageId"),
+                        0,
+                    ),
+                    message_thread_id=message_thread_id,
+                )
+
+                if comment_complete:
+                    AUTO_DOWNLOAD_COMMENT_THREADS.pop(key, None)
+                else:
+                    comment_scan["nextFileType"] = next_file_type
+                    comment_scan["nextFromMessageId"] = next_cursor
+
 
 async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
     db: sqlite3.Connection = app.state.db
@@ -793,6 +1089,7 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
             continue
 
         automation_map = get_automation_map(db, telegram_id=telegram_id)
+        group_automations = list_chat_group_automations(db, telegram_id=telegram_id)
         root_path = deps.tdlib_account_root_path(app, db, telegram_id, root_path_cache)
         if root_path is None:
             continue
@@ -825,7 +1122,12 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
             await deps.emit_file_status(deps.td_file_status_payload(file_record))
 
             candidate_chat_id = _int_or_default(candidate.get("chatId"), 0)
-            automation = automation_map.get((telegram_id, candidate_chat_id))
+            automation = _resolve_effective_automation_for_chat(
+                telegram_id=telegram_id,
+                chat_id=candidate_chat_id,
+                direct_automations=automation_map,
+                group_automations=group_automations,
+            )
             if isinstance(automation, dict) and _automation_supports_comment_download(
                 automation
             ):
@@ -864,7 +1166,8 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
 async def _run_transfer_scan_cycle(app: FastAPI) -> None:
     db: sqlite3.Connection = app.state.db
     automations = get_automation_map(db)
-    if not automations:
+    group_automations = list_chat_group_automations(db)
+    if not automations and not group_automations:
         return
 
     for (telegram_id, chat_id), automation in automations.items():
@@ -902,6 +1205,52 @@ async def _run_transfer_scan_cycle(app: FastAPI) -> None:
                 automation=automation,
             )
 
+    for group in group_automations:
+        telegram_id = _int_or_default(group.get("telegramId"), 0)
+        group_id = str(group.get("groupId") or "").strip()
+        automation = group.get("auto") if isinstance(group.get("auto"), dict) else None
+        if telegram_id <= 0 or not group_id or not isinstance(automation, dict):
+            continue
+
+        transfer_cfg = (
+            automation.get("transfer") if isinstance(automation, dict) else None
+        )
+        if not isinstance(transfer_cfg, dict) or not bool(transfer_cfg.get("enabled")):
+            continue
+
+        rule = transfer_cfg.get("rule")
+        if not isinstance(rule, dict):
+            continue
+
+        for chat_id in _group_chat_ids(group):
+            if (telegram_id, chat_id) in automations:
+                continue
+
+            candidates = _db_transfer_candidates(
+                db,
+                telegram_id=telegram_id,
+                chat_id=chat_id,
+                limit=200,
+            )
+            for item in candidates:
+                queue_transfer_candidate(item)
+
+            transfer_history = bool(rule.get("transferHistory", True))
+            progress = _group_member_progress(automation, chat_id=chat_id)
+            state = _int_or_default(progress.get("state"), 0)
+            if (
+                transfer_history
+                and not candidates
+                and not _state_is_enabled(state, HISTORY_TRANSFER_STATE)
+            ):
+                progress["state"] = _state_enable(state, HISTORY_TRANSFER_STATE)
+                _persist_group_automation(
+                    db,
+                    telegram_id=telegram_id,
+                    group_id=group_id,
+                    automation=automation,
+                )
+
 
 async def _run_transfer_tick(deps: WorkerDeps, app: FastAPI) -> None:
     candidate = _pop_transfer_candidate()
@@ -916,7 +1265,13 @@ async def _run_transfer_tick(deps: WorkerDeps, app: FastAPI) -> None:
         return
 
     automations = get_automation_map(db, telegram_id=telegram_id)
-    automation = automations.get((telegram_id, chat_id))
+    group_automations = list_chat_group_automations(db, telegram_id=telegram_id)
+    automation = _resolve_effective_automation_for_chat(
+        telegram_id=telegram_id,
+        chat_id=chat_id,
+        direct_automations=automations,
+        group_automations=group_automations,
+    )
     if not isinstance(automation, dict):
         return
 

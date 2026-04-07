@@ -210,9 +210,10 @@ export default function FileControl({
         className="flex w-full items-center justify-end space-x-4 md:justify-around md:space-x-2"
         onClick={(e) => e.preventDefault()}
       >
-        {chat?.type === "channel" && file.hasReply && (
-          <ActionButton isMobile={isMobile} {...replyBtnProps} />
-        )}
+        {file.hasReply &&
+          (chat?.kind === "group" || chat?.type === "channel") && (
+            <ActionButton isMobile={isMobile} {...replyBtnProps} />
+          )}
         {statusMapping[file.downloadStatus].map((btnProps, index) => (
           <ActionButton key={index} isMobile={isMobile} {...btnProps} />
         ))}

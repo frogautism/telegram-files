@@ -19,7 +19,12 @@ from .app_state import (
     _emit_ws_payload,
 )
 from .automation_workers import queue_transfer_candidate as _queue_transfer_candidate
-from .db import get_automation_map, get_settings_by_keys, get_telegram_account
+from .db import (
+    find_chat_group_for_chat,
+    get_automation_map,
+    get_settings_by_keys,
+    get_telegram_account,
+)
 from .file_record_ops import (
     file_for_transfer as _db_file_for_transfer,
     update_tdlib_file_status as _update_tdlib_file_status,
@@ -387,6 +392,13 @@ def _queue_transfer_for_completed_file(
 
     automations = get_automation_map(db, telegram_id=telegram_id)
     automation = automations.get((telegram_id, chat_id))
+    if not isinstance(automation, dict):
+        group = find_chat_group_for_chat(
+            db,
+            telegram_id=telegram_id,
+            chat_id=chat_id,
+        )
+        automation = group.get("auto") if isinstance(group, dict) else None
     if not isinstance(automation, dict):
         return
 

@@ -16,19 +16,25 @@ import { cn } from "@/lib/utils";
 import { CommandLoading } from "cmdk";
 import { Toggle } from "./ui/toggle";
 import { TooltipWrapper } from "@/components/ui/tooltip";
+import ChatGroupDialog from "@/components/chat-group-dialog";
+import { useTelegramAccount } from "@/hooks/use-telegram-account";
 
 export default function ChatSelect({ disabled }: { disabled: boolean }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [archived, setArchived] = useState(false);
+  const { accountId } = useTelegramAccount();
   const {
     isLoading,
+    reload,
     handleQueryChange,
     chats,
     chat: selectedChat,
     handleChatChange,
     handleArchivedChange,
   } = useTelegramChat();
+  const groupedChats = chats.filter((chat) => chat.kind === "group");
+  const directChats = chats.filter((chat) => chat.kind !== "group");
 
   useEffect(() => {
     handleQueryChange(search);
@@ -108,8 +114,58 @@ export default function ChatSelect({ disabled }: { disabled: boolean }) {
             <CommandEmpty>
               {!isLoading && chats.length === 0 && "No chat found."}
             </CommandEmpty>
-            <CommandGroup>
-              {chats.map((chat) => (
+            {groupedChats.length > 0 && (
+              <CommandGroup heading="Groups">
+                {groupedChats.map((chat) => (
+                  <CommandItem
+                    key={chat.id}
+                    value={chat.id}
+                    onSelect={(currentValue) => {
+                      handleChatChange(currentValue);
+                      setOpen(false);
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div
+                        className={cn(
+                          "h-3 w-1 rounded-md bg-green-500 opacity-0",
+                          {
+                            "opacity-100": Boolean(
+                              chat.auto?.download.enabled ||
+                              chat.auto?.preload.enabled ||
+                              chat.auto?.transfer.enabled,
+                            ),
+                          },
+                        )}
+                      />
+                      <Avatar className="h-6 w-6">
+                        <AvatarFallback>
+                          {(chat.name[0] ?? chat.id[0] ?? "G").toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex flex-col">
+                        <span className="font-medium">
+                          {(chat.name ?? "").length > 0 ? chat.name : chat.id}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {chat.memberCount ?? chat.chatIds?.length ?? 0} chats
+                        </span>
+                      </div>
+                    </div>
+                    <Check
+                      className={cn(
+                        "ml-auto",
+                        selectedChat?.id === chat.id
+                          ? "opacity-100"
+                          : "opacity-0",
+                      )}
+                    />
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+            <CommandGroup heading="Chats">
+              {directChats.map((chat) => (
                 <CommandItem
                   key={chat.id}
                   value={chat.id}
@@ -123,10 +179,11 @@ export default function ChatSelect({ disabled }: { disabled: boolean }) {
                       className={cn(
                         "h-3 w-1 rounded-md bg-green-500 opacity-0",
                         {
-                          "opacity-100":
-                            chat.auto?.download.enabled ??
-                            chat.auto?.preload.enabled ??
+                          "opacity-100": Boolean(
+                            chat.auto?.download.enabled ||
+                            chat.auto?.preload.enabled ||
                             chat.auto?.transfer.enabled,
+                          ),
                         },
                       )}
                     />
@@ -159,6 +216,9 @@ export default function ChatSelect({ disabled }: { disabled: boolean }) {
               ))}
             </CommandGroup>
           </CommandList>
+          <div className="border-t p-2">
+            <ChatGroupDialog accountId={accountId} onSaved={reload} />
+          </div>
         </Command>
       </PopoverContent>
     </Popover>

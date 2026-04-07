@@ -5,11 +5,11 @@ import { createContext, useContext, useMemo, useState } from "react";
 import { type TelegramChat } from "@/lib/types";
 import useSWR from "swr";
 import { useDebouncedCallback } from "use-debounce";
-import { type KeyedMutator } from "swr/_internal";
+import { getGroupId, isGroupChatId } from "@/lib/chat-target";
 
 interface TelegramChatContextType {
   isLoading: boolean;
-  reload: KeyedMutator<TelegramChat[]>;
+  reload: () => Promise<unknown>;
   chatId: string | undefined;
   chat?: TelegramChat;
   chats: TelegramChat[];
@@ -38,17 +38,33 @@ export const TelegramChatProvider: React.FC<TelegramChatProviderProps> = ({
   const searchParams = useSearchParams();
   const accountId = searchParams.get("id") ?? "";
   const chatId = searchParams.get("chatId") ?? "";
+  const selectedGroupId = getGroupId(chatId);
 
   const handleQueryChange = useDebouncedCallback((search: string) => {
     setQuery(search);
   }, 500);
 
   const {
-    data: chats,
-    isLoading,
-    mutate,
+    data: directChats,
+    isLoading: directChatsLoading,
+    mutate: mutateDirectChats,
   } = useSWR<TelegramChat[]>(
-    `/telegram/${accountId}/chats?query=${query}&archived=${archived}&chatId=${chatId ?? ""}`,
+    accountId
+      ? `/telegram/${accountId}/chats?query=${query}&archived=${archived}&chatId=${isGroupChatId(chatId) ? "" : (chatId ?? "")}`
+      : null,
+  );
+  const {
+    data: groupChats,
+    isLoading: groupChatsLoading,
+    mutate: mutateGroupChats,
+  } = useSWR<TelegramChat[]>(
+    accountId
+      ? `/telegram/${accountId}/chat-groups?query=${query}&chatId=${selectedGroupId ? `group:${selectedGroupId}` : ""}`
+      : null,
+  );
+  const chats = useMemo(
+    () => [...(groupChats ?? []), ...(directChats ?? [])],
+    [directChats, groupChats],
   );
 
   const chat = useMemo(
@@ -71,11 +87,11 @@ export const TelegramChatProvider: React.FC<TelegramChatProviderProps> = ({
   return (
     <TelegramChatContext.Provider
       value={{
-        isLoading,
-        reload: mutate,
+        isLoading: directChatsLoading || groupChatsLoading,
+        reload: () => Promise.all([mutateDirectChats(), mutateGroupChats()]),
         chatId,
         chat,
-        chats: chats ?? [],
+        chats,
         query,
         archived,
         handleChatChange,

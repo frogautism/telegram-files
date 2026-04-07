@@ -67,6 +67,7 @@ def _td_chat_to_response(
     )
     return {
         "id": str(chat_id),
+        "kind": "chat",
         "name": "Saved Messages" if chat_id == telegram_id else (title or str(chat_id)),
         "type": _td_chat_type(chat_payload.get("type") or {}),
         "avatar": avatar,

@@ -21,6 +21,7 @@ import { type Auto } from "@/lib/types";
 import { Badge } from "./ui/badge";
 import { cn } from "@/lib/utils";
 import AutomationForm from "@/components/automation-form";
+import { isGroupChatId } from "@/lib/chat-target";
 
 const DEFAULT_AUTO: Auto = {
   preload: {
@@ -55,12 +56,15 @@ export default function AutomationDialog() {
   const [open, setOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [auto, setAuto] = useState<Auto>(DEFAULT_AUTO);
+  const isGroupChat = Boolean(chat?.id && isGroupChatId(chat.id));
   const { trigger: triggerAuto, isMutating: isAutoMutating } = useSWRMutation(
     !accountId || !chat
       ? undefined
-      : `/${accountId}/file/update-auto-settings?telegramId=${accountId}&chatId=${chat?.id}`,
+      : isGroupChat && chat?.groupId
+        ? `/${accountId}/chat-group/${chat.groupId}/update-auto-settings`
+        : `/${accountId}/file/update-auto-settings?telegramId=${accountId}&chatId=${chat?.id}`,
     (
-      key,
+      key: string,
       {
         arg,
       }: {
@@ -124,7 +128,8 @@ export default function AutomationDialog() {
             Automation for {chat?.name ?? "Unknown Chat"}
           </DialogTitle>
           <DialogDescription>
-            Configure preload, download, and transfer rules for this chat.
+            Configure preload, download, and transfer rules for this
+            {isGroupChat ? " group chat." : " chat."}
           </DialogDescription>
         </DialogHeader>
         {!editMode && chat?.auto ? (
@@ -211,7 +216,7 @@ export default function AutomationDialog() {
                             <Badge
                               key={type}
                               variant="secondary"
-                                className="flex items-center gap-1 bg-card px-3 py-1 capitalize text-foreground"
+                              className="flex items-center gap-1 bg-card px-3 py-1 capitalize text-foreground"
                             >
                               {type}
                             </Badge>
@@ -299,7 +304,7 @@ export default function AutomationDialog() {
                     </div>
                     <div className="flex flex-col space-y-3 rounded-[4px] bg-muted p-3">
                       <div className="flex items-center justify-between">
-                          <span className="text-xs text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           Transfer Policy
                         </span>
                         <Badge variant="outline" className="font-normal">

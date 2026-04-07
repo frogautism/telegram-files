@@ -11,6 +11,7 @@ import { useWebsocket } from "@/hooks/use-websocket";
 import { WebSocketMessageType } from "@/lib/websocket-types";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useDebounce } from "use-debounce";
+import { getFilesApiPath, isGroupChatId } from "@/lib/chat-target";
 
 const DEFAULT_FILTERS: FileFilter = {
   search: "",
@@ -34,9 +35,10 @@ export function useFiles(
   link?: string,
 ) {
   const noAccountSpecified = accountId === "-1" && chatId === "-1";
+  const isGroupChat = isGroupChatId(chatId);
   const url = noAccountSpecified
     ? "/files"
-    : `/telegram/${accountId}/chat/${chatId}/files`;
+    : getFilesApiPath(accountId, chatId);
   const { lastJsonMessage } = useWebsocket();
   const [latestFilesStatus, setLatestFileStatus] = useState<
     Record<
@@ -55,9 +57,11 @@ export function useFiles(
   >({});
   const [filters, setFilters, clearFilters] = useLocalStorage<FileFilter>(
     "telegramFileListFilter",
-    { ...DEFAULT_FILTERS, offline: noAccountSpecified },
+    { ...DEFAULT_FILTERS, offline: noAccountSpecified || isGroupChat },
   );
   const getKey = (page: number, previousPageData: FileResponse) => {
+    const effectiveSort = filters.sort ?? (isGroupChat ? "date" : undefined);
+    const effectiveOrder = filters.order ?? (isGroupChat ? "desc" : undefined);
     const params = new URLSearchParams({
       ...(filters.search && {
         search: window.encodeURIComponent(filters.search),
@@ -75,8 +79,8 @@ export function useFiles(
       ...(filters.dateRange && { dateRange: filters.dateRange.join(",") }),
       ...(filters.sizeRange && { sizeRange: filters.sizeRange.join(",") }),
       ...(filters.sizeUnit && { sizeUnit: filters.sizeUnit }),
-      ...(filters.sort && { sort: filters.sort }),
-      ...(filters.order && { order: filters.order }),
+      ...(effectiveSort && { sort: effectiveSort }),
+      ...(effectiveOrder && { order: effectiveOrder }),
     });
 
     if (page === 0) {
@@ -88,16 +92,16 @@ export function useFiles(
     }
 
     params.set("fromMessageId", previousPageData.nextFromMessageId.toString());
-    if (filters.offline && previousPageData.files.length > 0) {
+    if ((filters.offline || isGroupChat) && previousPageData.files.length > 0) {
       const lastFile =
         previousPageData.files[previousPageData.files.length - 1];
-      if (filters.sort === "size") {
+      if (effectiveSort === "size") {
         params.set("fromSortField", lastFile!.size.toString());
-      } else if (filters.sort === "completion_date") {
+      } else if (effectiveSort === "completion_date") {
         params.set("fromSortField", lastFile!.completionDate.toString());
-      } else if (filters.sort === "date") {
+      } else if (effectiveSort === "date") {
         params.set("fromSortField", lastFile!.date.toString());
-      } else if (filters.sort === "reaction_count") {
+      } else if (effectiveSort === "reaction_count") {
         params.set("fromSortField", lastFile!.reactionCount.toString());
       }
     }
@@ -173,13 +177,13 @@ export function useFiles(
   }, [lastJsonMessage]);
 
   useEffect(() => {
-    if (noAccountSpecified && !filters.offline) {
+    if ((noAccountSpecified || isGroupChat) && !filters.offline) {
       setFilters((prev) => ({
         ...prev,
         offline: true,
       }));
     }
-  }, [filters.offline, noAccountSpecified, setFilters]);
+  }, [filters.offline, isGroupChat, noAccountSpecified, setFilters]);
 
   const files = useMemo(() => {
     if (!pages) return [];

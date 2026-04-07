@@ -78,8 +78,11 @@ from .file_record_ops import (
 from .db import (
     count_files_by_type,
     cancel_file_download,
+    create_chat_group,
     create_connection,
+    delete_chat_group,
     delete_telegram,
+    get_chat_group,
     get_file_preview_info,
     get_files_count,
     get_automation_map,
@@ -89,6 +92,7 @@ from .db import (
     get_telegram_download_statistics_by_phase,
     get_telegram_ping_seconds,
     init_schema,
+    list_chat_groups,
     list_files,
     list_chats,
     list_telegrams,
@@ -98,6 +102,8 @@ from .db import (
     update_file_tags,
     update_files_tags,
     update_auto_settings,
+    update_chat_group,
+    update_chat_group_auto_settings,
     update_telegram_proxy,
     upsert_settings,
 )
@@ -785,6 +791,113 @@ async def telegram_chats(
     )
 
 
+@app.get("/telegram/{telegramId}/chat-groups")
+def telegram_chat_groups(
+    telegramId: str,
+    query: str = Query(default=""),
+    chatId: str | None = Query(default=None),
+    db: sqlite3.Connection = Depends(get_db),
+) -> list[dict[str, Any]]:
+    if _is_pending_account(telegramId):
+        return []
+
+    normalized_telegram_id = _to_telegram_id(telegramId)
+    activated_group_id = None
+    if chatId and chatId.startswith("group:"):
+        activated_group_id = chatId.split(":", 1)[1].strip() or None
+
+    return list_chat_groups(
+        db,
+        telegram_id=normalized_telegram_id,
+        query=query,
+        activated_group_id=activated_group_id,
+    )
+
+
+@app.post("/telegram/{telegramId}/chat-groups")
+def telegram_chat_group_create(
+    telegramId: str,
+    payload: dict[str, Any] | None = None,
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    if _is_pending_account(telegramId):
+        raise HTTPException(
+            status_code=400,
+            detail="Pending account does not support group chats.",
+        )
+
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    try:
+        return create_chat_group(
+            db,
+            telegram_id=_to_telegram_id(telegramId),
+            group_id=uuid4().hex,
+            name=str(normalized_payload.get("name") or ""),
+            chat_ids=(
+                normalized_payload.get("chatIds")
+                if isinstance(normalized_payload.get("chatIds"), list)
+                else []
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/telegram/{telegramId}/chat-groups/{groupId}")
+def telegram_chat_group_update(
+    telegramId: str,
+    groupId: str,
+    payload: dict[str, Any] | None = None,
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    if _is_pending_account(telegramId):
+        raise HTTPException(
+            status_code=400,
+            detail="Pending account does not support group chats.",
+        )
+
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    try:
+        group = update_chat_group(
+            db,
+            telegram_id=_to_telegram_id(telegramId),
+            group_id=groupId,
+            name=str(normalized_payload.get("name") or ""),
+            chat_ids=(
+                normalized_payload.get("chatIds")
+                if isinstance(normalized_payload.get("chatIds"), list)
+                else []
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if group is None:
+        raise HTTPException(status_code=404, detail="Group chat not found.")
+    return group
+
+
+@app.post("/telegram/{telegramId}/chat-groups/{groupId}/delete")
+def telegram_chat_group_delete(
+    telegramId: str,
+    groupId: str,
+    db: sqlite3.Connection = Depends(get_db),
+) -> Response:
+    if _is_pending_account(telegramId):
+        raise HTTPException(
+            status_code=400,
+            detail="Pending account does not support group chats.",
+        )
+
+    normalized_telegram_id = _to_telegram_id(telegramId)
+    group = get_chat_group(db, telegram_id=normalized_telegram_id, group_id=groupId)
+    if group is None:
+        raise HTTPException(status_code=404, detail="Group chat not found.")
+
+    delete_chat_group(db, telegram_id=normalized_telegram_id, group_id=groupId)
+    return Response(status_code=200)
+
+
 @app.get("/telegram/{telegramId}/download-statistics")
 async def telegram_download_statistics(
     telegramId: str,
@@ -1094,6 +1207,32 @@ async def telegram_files(
         return db_result
 
 
+@app.get("/telegram/{telegramId}/chat-group/{groupId}/files")
+def telegram_chat_group_files(
+    telegramId: int,
+    groupId: str,
+    request: Request,
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    group = get_chat_group(db, telegram_id=telegramId, group_id=groupId)
+    if group is None:
+        raise HTTPException(status_code=404, detail="Group chat not found.")
+
+    raw_chat_ids = group.get("chatIds")
+    chat_ids = (
+        [int(item) for item in raw_chat_ids if str(item).strip()]
+        if isinstance(raw_chat_ids, list)
+        else []
+    )
+    return list_files(
+        db,
+        telegram_id=telegramId,
+        chat_id=0,
+        chat_ids=chat_ids,
+        filters=_get_filters(request),
+    )
+
+
 @app.get("/telegram/{telegramId}/chat/{chatId}/files/count")
 async def telegram_files_count(
     telegramId: int,
@@ -1130,6 +1269,30 @@ async def telegram_files_count(
             exc,
         )
         return db_result
+
+
+@app.get("/telegram/{telegramId}/chat-group/{groupId}/files/count")
+def telegram_chat_group_files_count(
+    telegramId: int,
+    groupId: str,
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, int]:
+    group = get_chat_group(db, telegram_id=telegramId, group_id=groupId)
+    if group is None:
+        raise HTTPException(status_code=404, detail="Group chat not found.")
+
+    raw_chat_ids = group.get("chatIds")
+    chat_ids = (
+        [int(item) for item in raw_chat_ids if str(item).strip()]
+        if isinstance(raw_chat_ids, list)
+        else []
+    )
+    return count_files_by_type(
+        db,
+        telegram_id=telegramId,
+        chat_id=0,
+        chat_ids=chat_ids,
+    )
 
 
 @app.post("/files/update-tags")
@@ -1565,6 +1728,31 @@ def file_update_auto_settings_route(
         chat_id=chatId,
         auto_payload=auto_payload,
     )
+    return Response(status_code=200)
+
+
+@app.post("/{telegramId}/chat-group/{groupId}/update-auto-settings")
+def chat_group_update_auto_settings_route(
+    telegramId: int,
+    groupId: str,
+    payload: dict[str, Any] | None = None,
+    db: sqlite3.Connection = Depends(get_db),
+) -> Response:
+    if _is_pending_account(str(telegramId)):
+        raise HTTPException(
+            status_code=400,
+            detail="Pending account does not support automation settings.",
+        )
+
+    auto_payload = payload if isinstance(payload, dict) else {}
+    updated = update_chat_group_auto_settings(
+        db,
+        telegram_id=telegramId,
+        group_id=groupId,
+        auto_payload=auto_payload,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Group chat not found.")
     return Response(status_code=200)
 
 

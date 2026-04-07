@@ -11,6 +11,7 @@ import { Ellipsis } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import * as React from "react";
 import { useEffect } from "react";
+import { getFilesCountApiPath } from "@/lib/chat-target";
 
 interface FileTypeFilterProps {
   offline: boolean;
@@ -59,7 +60,7 @@ export default function FileTypeFilter({
 }: FileTypeFilterProps) {
   const [localType, setLocalType] = React.useState<FileType | "all">(type);
   const { data: counts, isLoading } = useSWR<Record<FileType, number>>(
-    `/telegram/${telegramId}/chat/${chatId}/files/count?offline=${offline}`,
+    `${getFilesCountApiPath(telegramId, chatId)}?offline=${offline}`,
   );
 
   const handleTypeChange = (value: FileType | "all") => {

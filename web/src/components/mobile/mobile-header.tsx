@@ -104,7 +104,7 @@ function MenuDrawer() {
               <div className="flex flex-col gap-3">
                 <div className="flex flex-col gap-1">
                   <Label className="text-xs font-bold text-muted-foreground">
-                    Auto Download
+                    Automation
                   </Label>
                   {chat ? (
                     <AutomationDialog />
@@ -123,7 +123,7 @@ function MenuDrawer() {
                     Layout
                   </Label>
                   <Toggle
-                    className="w-full border border-input rounded-[4px]"
+                    className="w-full rounded-[4px] border border-input"
                     pressed={layout === "gallery"}
                     onPressedChange={(pressed) => {
                       setLayout(pressed ? "gallery" : "detailed");
@@ -143,7 +143,7 @@ function MenuDrawer() {
                   </Toggle>
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-2 border-t border-border pt-3 mt-3">
+              <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
                 <Badge
                   variant={
                     connectionStatus === "Open" ? "default" : "secondary"
