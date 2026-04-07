@@ -189,6 +189,7 @@ export const TransferPolices = [
   "GROUP_BY_CHAT",
   "GROUP_BY_TYPE",
   "GROUP_BY_AI",
+  "GROUP_BY_HASHTAG",
 ] as const;
 export type TransferPolicy = (typeof TransferPolices)[number];
 export const DuplicationPolicies = [

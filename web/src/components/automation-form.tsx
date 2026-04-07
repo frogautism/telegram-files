@@ -429,6 +429,21 @@ function TransferRule({ value, onChange }: TransferRuleProps) {
               />
             </div>
 
+            {value.transferPolicy === "GROUP_BY_HASHTAG" && (
+              <HashtagRulesEditor
+                value={
+                  Array.isArray(value.extra.hashtagRules)
+                    ? value.extra.hashtagRules
+                    : []
+                }
+                onChange={(rules) =>
+                  handleTransferRuleChange({
+                    extra: { ...value.extra, hashtagRules: rules },
+                  })
+                }
+              />
+            )}
+
             {value.transferPolicy === "GROUP_BY_AI" && (
               <div className="flex flex-col space-y-2">
                 <Label htmlFor="prompt-template">
@@ -528,6 +543,22 @@ const PolicyLegends: Record<
       </div>
     ),
   },
+  GROUP_BY_HASHTAG: {
+    title: "Group by Hashtag",
+    description: (
+      <div className="space-y-2">
+        <p className="text-sm">
+          Transfer files to folders based on hashtags found in the file caption
+          or filename. Define rules mapping a hashtag to a destination subfolder.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Match type can be exact (#abc only matches the tag &quot;abc&quot;) or
+          partial (matches any tag containing &quot;abc&quot;). Files with no
+          matching hashtag are placed at the destination root.
+        </p>
+      </div>
+    ),
+  },
   GROUP_BY_AI: {
     title: "Group by AI",
     description: (
@@ -573,6 +604,96 @@ const PolicyLegends: Record<
       "Calculate the hash (md5) of the file and compare with the existing file, if the hash is the same, delete the original file and set the local path to the existing file, otherwise, move the file",
   },
 };
+
+type HashtagMatchType = "EXACT" | "PARTIAL";
+type HashtagRule = {
+  hashtag: string;
+  folder: string;
+  matchType: HashtagMatchType;
+};
+
+function HashtagRulesEditor({
+  value,
+  onChange,
+}: {
+  value: HashtagRule[];
+  onChange: (rules: HashtagRule[]) => void;
+}) {
+  const updateRule = (index: number, patch: Partial<HashtagRule>) => {
+    const next = value.map((rule, i) =>
+      i === index ? { ...rule, ...patch } : rule,
+    );
+    onChange(next);
+  };
+
+  const addRule = () => {
+    onChange([
+      ...value,
+      { hashtag: "", folder: "", matchType: "EXACT" satisfies HashtagMatchType },
+    ]);
+  };
+
+  const removeRule = (index: number) => {
+    onChange(value.filter((_, i) => i !== index));
+  };
+
+  return (
+    <div className="flex flex-col space-y-2">
+      <Label>Hashtag Rules</Label>
+      <p className="text-xs text-muted-foreground">
+        Files whose caption or filename contain a matching hashtag will be moved
+        to the corresponding subfolder under the destination.
+      </p>
+      <div className="space-y-2">
+        {value.map((rule, index) => (
+          <div
+            key={index}
+            className="flex flex-col gap-2 rounded-[4px] border border-border bg-card p-3 sm:flex-row sm:items-center"
+          >
+            <Input
+              className="sm:w-32"
+              placeholder="#hashtag"
+              value={rule.hashtag}
+              onChange={(e) => updateRule(index, { hashtag: e.target.value })}
+            />
+            <Input
+              className="flex-1"
+              placeholder="subfolder/path"
+              value={rule.folder}
+              onChange={(e) => updateRule(index, { folder: e.target.value })}
+            />
+            <Select
+              value={rule.matchType}
+              onValueChange={(v) =>
+                updateRule(index, { matchType: v as HashtagMatchType })
+              }
+            >
+              <SelectTrigger className="sm:w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="EXACT">Exact</SelectItem>
+                <SelectItem value="PARTIAL">Partial</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => removeRule(index)}
+              aria-label="Remove rule"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        ))}
+      </div>
+      <Button type="button" variant="outline" onClick={addRule}>
+        Add hashtag rule
+      </Button>
+    </div>
+  );
+}
 
 interface PolicySelectProps {
   policyType: "transfer" | "duplication";

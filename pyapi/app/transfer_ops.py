@@ -195,6 +195,65 @@ def _classify_ai_path(row: sqlite3.Row, rule: dict[str, Any]) -> Path:
     return _normalize_ai_path(classified_path)
 
 
+_HASHTAG_PATTERN = re.compile(r"#([\w]+)", re.UNICODE)
+
+
+def _row_get(row: sqlite3.Row, key: str) -> Any:
+    try:
+        if key in row.keys():
+            return row[key]
+    except (IndexError, KeyError):
+        return None
+    return None
+
+
+def _extract_hashtags(row: sqlite3.Row) -> list[str]:
+    sources: list[str] = []
+    caption = _row_get(row, "caption")
+    if caption:
+        sources.append(str(caption))
+    file_name = _row_get(row, "file_name")
+    if file_name:
+        sources.append(str(file_name))
+    tags: list[str] = []
+    seen: set[str] = set()
+    for source in sources:
+        for match in _HASHTAG_PATTERN.findall(source):
+            tag = match.lower()
+            if tag and tag not in seen:
+                seen.add(tag)
+                tags.append(tag)
+    return tags
+
+
+def _classify_hashtag_folder(row: sqlite3.Row, rule: dict[str, Any]) -> Path | None:
+    extra = rule.get("extra") if isinstance(rule.get("extra"), dict) else {}
+    raw_rules = extra.get("hashtagRules") if isinstance(extra, dict) else None
+    if not isinstance(raw_rules, list) or not raw_rules:
+        return None
+
+    tags = _extract_hashtags(row)
+    if not tags:
+        return None
+
+    for entry in raw_rules:
+        if not isinstance(entry, dict):
+            continue
+        hashtag = str(entry.get("hashtag") or "").strip().lstrip("#").lower()
+        folder = str(entry.get("folder") or "").strip()
+        if not hashtag or not folder:
+            continue
+        match_type = str(entry.get("matchType") or "EXACT").upper()
+        matched = False
+        if match_type == "PARTIAL":
+            matched = any(hashtag in tag for tag in tags)
+        else:
+            matched = hashtag in tags
+        if matched:
+            return _normalize_ai_path(folder)
+    return None
+
+
 def _transfer_target_path(row: sqlite3.Row, rule: dict[str, Any]) -> Path:
     destination = str(rule.get("destination") or "").strip()
     if not destination:
@@ -216,6 +275,11 @@ def _transfer_target_path(row: sqlite3.Row, rule: dict[str, Any]) -> Path:
         )
     if transfer_policy == "GROUP_BY_TYPE":
         return root / str(row["type"] or "file") / base_name
+    if transfer_policy == "GROUP_BY_HASHTAG":
+        matched_folder = _classify_hashtag_folder(row, rule)
+        if matched_folder is None:
+            return root / base_name
+        return root / matched_folder / base_name
     if transfer_policy == "GROUP_BY_AI":
         classified_path = _classify_ai_path(row, rule)
         if classified_path.suffix:
