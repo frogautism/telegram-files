@@ -638,9 +638,6 @@ def start_tdlib_download_for_message(
     if target_file_id == 0:
         raise RuntimeError("Invalid TDLib file id")
 
-    if file_id != 0 and target_file_id != file_id:
-        target_file_id = file_id
-
     file_payload = _td_message_to_file(telegram_id, message_result)
     if file_payload is None:
         raise RuntimeError("Failed to map TDLib file payload")

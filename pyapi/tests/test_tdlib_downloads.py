@@ -62,6 +62,87 @@ class _FakeTdlibManager:
         raise AssertionError(f"Unexpected TDLib request: {request_type}")
 
 
+class _FakeTdlibManagerWithStaleRequestId:
+    def __init__(self) -> None:
+        self.requests: list[tuple[str, int]] = []
+
+    def request(self, account_key: str, payload: dict, timeout_seconds: float):
+        request_type = str(payload.get("@type") or "")
+        file_id = int(payload.get("file_id") or 0)
+        self.requests.append((request_type, file_id))
+        if request_type == "getMessage":
+            return {
+                "@type": "message",
+                "id": 200,
+                "chat_id": 100,
+                "date": 1710000000,
+                "message_thread_id": 0,
+                "media_album_id": 0,
+                "content": {
+                    "@type": "messagePhoto",
+                    "caption": {"text": "fresh file id"},
+                    "has_spoiler": False,
+                    "photo": {
+                        "sizes": [
+                            {
+                                "width": 640,
+                                "height": 480,
+                                "type": "x",
+                                "photo": {
+                                    "id": 321,
+                                    "size": 1234,
+                                    "expected_size": 1234,
+                                    "local": {
+                                        "is_downloading_completed": False,
+                                        "is_downloading_active": False,
+                                        "downloaded_size": 0,
+                                        "path": "",
+                                    },
+                                    "remote": {
+                                        "id": "remote-321",
+                                        "unique_id": "fresh-photo-1",
+                                    },
+                                },
+                            }
+                        ],
+                        "minithumbnail": {"data": "thumb"},
+                    },
+                },
+            }
+        if request_type == "getMessageThread":
+            return {
+                "@type": "messageThreadInfo",
+                "chat_id": 100,
+                "message_thread_id": 0,
+            }
+        if request_type == "addFileToDownloads":
+            if file_id != 321:
+                return {"@type": "error", "message": "File not found"}
+            return {"@type": "ok"}
+        if request_type == "getFile":
+            if file_id != 321:
+                return {"@type": "error", "message": "File not found"}
+            return {
+                "@type": "file",
+                "id": 321,
+                "size": 1234,
+                "expected_size": 1234,
+                "local": {
+                    "is_downloading_completed": False,
+                    "is_downloading_active": True,
+                    "downloaded_size": 0,
+                    "path": "",
+                },
+                "remote": {
+                    "id": "remote-321",
+                    "unique_id": "fresh-photo-1",
+                },
+            }
+        if request_type == "downloadFile":
+            return {"@type": "error", "message": "should not use stale file id"}
+        raise AssertionError(f"Unexpected TDLib request: {request_type}")
+
+
 class TdlibDownloadsTest(unittest.TestCase):
     def test_start_download_reuses_completed_duplicate_before_tdlib_download(
         self,
@@ -118,6 +199,29 @@ class TdlibDownloadsTest(unittest.TestCase):
         self.assertEqual(result["downloadStatus"], "completed")
         self.assertEqual(result["localPath"], "D:/downloads/existing.jpg")
         self.assertEqual(result["messageId"], 200)
+
+    def test_start_download_uses_live_tdlib_file_id_from_message(self) -> None:
+        td_manager = _FakeTdlibManagerWithStaleRequestId()
+        with patch(
+            "app.tdlib_downloads._load_tdlib_session_for_account", return_value=True
+        ):
+            result = start_tdlib_download_for_message(
+                td_manager,
+                db=None,
+                telegram_id=1,
+                root_path="D:/tdlib/account-1",
+                chat_id=100,
+                message_id=200,
+                file_id=999,
+            )
+
+        self.assertEqual(result["id"], 321)
+        self.assertEqual(result["uniqueId"], "fresh-photo-1")
+        self.assertEqual(result["downloadStatus"], "downloading")
+        self.assertIn(("addFileToDownloads", 321), td_manager.requests)
+        self.assertIn(("getFile", 321), td_manager.requests)
+        self.assertNotIn(("addFileToDownloads", 999), td_manager.requests)
+        self.assertNotIn(("downloadFile", 999), td_manager.requests)
 
 
 if __name__ == "__main__":
