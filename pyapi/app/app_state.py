@@ -11,7 +11,9 @@ from uuid import uuid4
 from fastapi import FastAPI, Request, WebSocket
 
 from .db import create_telegram_account
+from .file_record_ops import upsert_tdlib_file_record
 from .tdlib import TdlibAuthManager
+from .tdlib_file_mapper import td_message_to_file
 
 
 SESSION_COOKIE_NAME = "tf"
@@ -277,6 +279,51 @@ def _tdlib_chat_update_payload(
     }
 
 
+def _tdlib_update_message(td_update: dict[str, Any]) -> dict[str, Any] | None:
+    message = td_update.get("message")
+    if isinstance(message, dict):
+        return message
+
+    last_message = td_update.get("last_message")
+    if isinstance(last_message, dict):
+        return last_message
+
+    return None
+
+
+def _persist_tdlib_file_update(
+    app: FastAPI,
+    telegram_id: str,
+    td_update: dict[str, Any],
+) -> None:
+    app_state = getattr(app, "state", None)
+    db = getattr(app_state, "db", None)
+    if db is None:
+        return
+
+    telegram_id_num = _int_or_default(telegram_id, 0)
+    if telegram_id_num <= 0:
+        return
+
+    message = _tdlib_update_message(td_update)
+    if message is None:
+        return
+
+    file_payload = td_message_to_file(telegram_id_num, message)
+    if file_payload is None:
+        return
+
+    try:
+        upsert_tdlib_file_record(db, file_payload=file_payload)
+    except Exception as exc:
+        logger.warning(
+            "Failed to persist TDLib file update for telegram=%s chat=%s: %s",
+            telegram_id,
+            file_payload.get("chatId"),
+            exc,
+        )
+
+
 def _pending_account_to_response(
     pending: PendingTelegramAccount,
 ) -> dict[str, Any]:
@@ -423,10 +470,11 @@ async def _handle_tdlib_update(
     telegram_id: str,
     td_update: dict[str, Any],
 ) -> None:
-    del app
     payload_data = _tdlib_chat_update_payload(telegram_id, td_update)
     if payload_data is None:
         return
+
+    _persist_tdlib_file_update(app, telegram_id, td_update)
 
     session_ids = _session_ids_for_telegram(str(telegram_id))
     if not session_ids:
