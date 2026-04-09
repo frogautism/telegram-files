@@ -213,9 +213,11 @@ class _TdlibSession:
         *,
         td_api: _TdJsonApi,
         on_authorization_state: Callable[[dict[str, Any]], None],
+        on_update: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._td_api = td_api
         self._on_authorization_state = on_authorization_state
+        self._on_update = on_update
         self._client = self._td_api.create_client()
         if not self._client:
             raise RuntimeError("Failed to create TDLib client instance")
@@ -293,6 +295,15 @@ class _TdlibSession:
                         self._on_authorization_state(authorization_state)
                     except Exception:
                         continue
+                continue
+
+            if str(payload.get("@type") or "").startswith("update"):
+                if self._on_update is None:
+                    continue
+                try:
+                    self._on_update(payload)
+                except Exception:
+                    continue
 
     def _fail_all_pending(self, payload: dict[str, Any]) -> None:
         with self._pending_lock:
@@ -312,6 +323,7 @@ class TdlibAuthManager:
         log_level: int,
         shared_lib_path: str | None,
         on_authorization_state: Callable[[str, dict[str, Any]], None] | None = None,
+        on_update: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         if api_id <= 0:
             raise TdlibConfigurationError("TELEGRAM_API_ID must be a positive integer")
@@ -322,6 +334,7 @@ class TdlibAuthManager:
         self._api_hash = api_hash
         self._application_version = application_version
         self._on_authorization_state = on_authorization_state
+        self._on_update = on_update
         self._td_api = _TdJsonApi(shared_lib_path, log_level)
         self._sessions: dict[str, _TdlibSession] = {}
         self._session_dirs: dict[str, str] = {}
@@ -339,6 +352,7 @@ class TdlibAuthManager:
                 on_authorization_state=lambda state: self._handle_auth_state(
                     account_id, state
                 ),
+                on_update=lambda update: self._handle_update(account_id, update),
             )
             self._sessions[account_id] = session
 
@@ -442,6 +456,10 @@ class TdlibAuthManager:
 
         if self._on_authorization_state is not None:
             self._on_authorization_state(account_id, state)
+
+    def _handle_update(self, account_id: str, update: dict[str, Any]) -> None:
+        if self._on_update is not None:
+            self._on_update(account_id, update)
 
     def _send_tdlib_parameters(self, account_id: str) -> None:
         payload = self._tdlib_parameters_request(account_id)

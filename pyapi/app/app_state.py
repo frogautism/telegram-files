@@ -21,6 +21,7 @@ EVENT_TYPE_METHOD_RESULT = 2
 EVENT_TYPE_FILE_UPDATE = 3
 EVENT_TYPE_FILE_DOWNLOAD = 4
 EVENT_TYPE_FILE_STATUS = 5
+EVENT_TYPE_CHAT_UPDATE = 6
 
 TELEGRAM_CONSTRUCTOR_STATE_READY = -1834871737
 TELEGRAM_CONSTRUCTOR_WAIT_PHONE_NUMBER = 306402531
@@ -45,6 +46,19 @@ TDLIB_AUTH_STATE_TO_CONSTRUCTOR = {
 
 logger = logging.getLogger(__name__)
 
+CHAT_UPDATE_TYPES = {
+    "updateNewMessage",
+    "updateMessageSendSucceeded",
+    "updateMessageContent",
+    "updateDeleteMessages",
+    "updateChatLastMessage",
+    "updateChatPosition",
+    "updateChatReadInbox",
+    "updateChatUnreadMentionCount",
+    "updateChatUnreadReactionCount",
+    "updateChatIsMarkedAsUnread",
+}
+
 
 @dataclass
 class PendingTelegramAccount:
@@ -66,6 +80,15 @@ def _auth_state(constructor: int, **extra: Any) -> dict[str, Any]:
     payload = {"constructor": constructor}
     payload.update(extra)
     return payload
+
+
+def _int_or_default(value: Any, default: int = 0) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _build_ws_payload(
@@ -94,6 +117,15 @@ def _session_id_from_request(request: Request) -> str:
 def _selected_telegram_id(session_id: str) -> str | None:
     with STATE_LOCK:
         return SESSION_TELEGRAM_SELECTION.get(session_id)
+
+
+def _session_ids_for_telegram(telegram_id: str) -> list[str]:
+    with STATE_LOCK:
+        return [
+            sid
+            for sid, selected in SESSION_TELEGRAM_SELECTION.items()
+            if selected == telegram_id
+        ]
 
 
 def _recover_auth_selection(session_id: str, method: str) -> str | None:
@@ -194,12 +226,6 @@ async def _emit_ws_payload(
     with STATE_LOCK:
         if session_id is not None:
             targets = list(WS_CONNECTIONS.get(session_id, set()))
-            if not targets:
-                targets = [
-                    ws
-                    for session_connections in WS_CONNECTIONS.values()
-                    for ws in session_connections
-                ]
         else:
             targets = [
                 ws
@@ -222,6 +248,33 @@ async def _emit_ws_payload(
             for session_connections in WS_CONNECTIONS.values():
                 if dead in session_connections:
                     session_connections.discard(dead)
+
+
+def _tdlib_chat_update_payload(
+    telegram_id: str,
+    td_update: dict[str, Any],
+) -> dict[str, Any] | None:
+    update_type = str(td_update.get("@type") or "")
+    if update_type not in CHAT_UPDATE_TYPES:
+        return None
+
+    message = td_update.get("message")
+    chat_id = _int_or_default(td_update.get("chat_id"), 0)
+    if chat_id == 0 and isinstance(message, dict):
+        chat_id = _int_or_default(message.get("chat_id"), 0)
+    if chat_id == 0:
+        return None
+
+    message_id = _int_or_default(td_update.get("message_id"), 0)
+    if message_id == 0 and isinstance(message, dict):
+        message_id = _int_or_default(message.get("id"), 0)
+
+    return {
+        "telegramId": str(telegram_id),
+        "chatId": str(chat_id),
+        "messageId": message_id,
+        "updateType": update_type,
+    }
 
 
 def _pending_account_to_response(
@@ -363,3 +416,22 @@ async def _handle_tdlib_authorization_state(
 
     if td_manager is not None:
         await asyncio.to_thread(td_manager.remove_session, telegram_id)
+
+
+async def _handle_tdlib_update(
+    app: FastAPI,
+    telegram_id: str,
+    td_update: dict[str, Any],
+) -> None:
+    del app
+    payload_data = _tdlib_chat_update_payload(telegram_id, td_update)
+    if payload_data is None:
+        return
+
+    session_ids = _session_ids_for_telegram(str(telegram_id))
+    if not session_ids:
+        return
+
+    ws_payload = _build_ws_payload(EVENT_TYPE_CHAT_UPDATE, payload_data)
+    for session_id in session_ids:
+        await _emit_ws_payload(ws_payload, session_id=session_id)

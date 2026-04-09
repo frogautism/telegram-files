@@ -1,11 +1,13 @@
 "use client";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useToast } from "@/hooks/use-toast";
-import { createContext, useContext, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { type TelegramChat } from "@/lib/types";
 import useSWR from "swr";
 import { useDebouncedCallback } from "use-debounce";
 import { getGroupId, isGroupChatId } from "@/lib/chat-target";
+import { useWebsocket } from "@/hooks/use-websocket";
+import { WebSocketMessageType } from "@/lib/websocket-types";
 
 interface TelegramChatContextType {
   isLoading: boolean;
@@ -35,6 +37,7 @@ export const TelegramChatProvider: React.FC<TelegramChatProviderProps> = ({
   const [archived, setArchived] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
+  const { lastJsonMessage } = useWebsocket();
   const searchParams = useSearchParams();
   const accountId = searchParams.get("id") ?? "";
   const chatId = searchParams.get("chatId") ?? "";
@@ -71,6 +74,27 @@ export const TelegramChatProvider: React.FC<TelegramChatProviderProps> = ({
     () => chats?.find((c) => c.id === chatId),
     [chatId, chats],
   );
+
+  useEffect(() => {
+    if (!accountId || lastJsonMessage?.type !== WebSocketMessageType.CHAT_UPDATE) {
+      return;
+    }
+
+    const data = lastJsonMessage.data as {
+      telegramId?: string;
+    };
+    if ((data.telegramId ?? "") !== accountId) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void Promise.all([mutateDirectChats(), mutateGroupChats()]);
+    }, 150);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [accountId, lastJsonMessage, mutateDirectChats, mutateGroupChats]);
 
   const handleChatChange = (newChatId: string) => {
     if (newChatId === chatId) {

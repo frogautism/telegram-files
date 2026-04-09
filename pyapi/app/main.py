@@ -23,6 +23,7 @@ from .app_state import (
     _build_ws_payload,
     _emit_ws_payload,
     _handle_tdlib_authorization_state,
+    _handle_tdlib_update,
     register_ws_connection,
     unregister_ws_connection,
 )
@@ -71,6 +72,11 @@ async def lifespan(app: FastAPI):
                         lambda: asyncio.create_task(
                             _handle_tdlib_authorization_state(app, telegram_id, state)
                         )
+                    )
+                ),
+                on_update=lambda telegram_id, update: loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(
+                        _handle_tdlib_update(app, telegram_id, update)
                     )
                 ),
             )
