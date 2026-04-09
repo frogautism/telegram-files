@@ -76,6 +76,44 @@ def find_file_by_id(
     ).fetchone()
 
 
+def _apply_media_album_caption_for_transfer(
+    db: sqlite3.Connection,
+    row: sqlite3.Row | None,
+) -> sqlite3.Row | dict[str, Any] | None:
+    if row is None:
+        return None
+
+    media_album_id = _int_or_default(row["media_album_id"], 0)
+    if media_album_id == 0 or str(row["caption"] or "").strip():
+        return row
+
+    chat_id = _int_or_default(row["chat_id"], 0)
+    if chat_id == 0:
+        return row
+
+    caption_row = db.execute(
+        """
+        SELECT caption
+        FROM file_record
+        WHERE telegram_id = ?
+          AND chat_id = ?
+          AND media_album_id = ?
+          AND type != 'thumbnail'
+          AND TRIM(COALESCE(caption, '')) != ''
+        ORDER BY message_id ASC
+        LIMIT 1
+        """,
+        (_int_or_default(row["telegram_id"], 0), chat_id, media_album_id),
+    ).fetchone()
+    if caption_row is None:
+        return row
+
+    return {
+        **{key: row[key] for key in row.keys()},
+        "caption": str(caption_row["caption"] or ""),
+    }
+
+
 def _upsert_tdlib_thumbnail_record(
     db: sqlite3.Connection,
     *,
@@ -573,7 +611,7 @@ def file_for_transfer(
     telegram_id: int,
     file_id: int = 0,
     unique_id: str,
-) -> sqlite3.Row | None:
+) -> sqlite3.Row | dict[str, Any] | None:
     row = find_file_by_identity(
         db,
         telegram_id=telegram_id,
@@ -581,7 +619,7 @@ def file_for_transfer(
         unique_id=unique_id,
     )
     if row is not None:
-        return row
+        return _apply_media_album_caption_for_transfer(db, row)
 
     row = find_file_by_id(
         db,
@@ -589,9 +627,9 @@ def file_for_transfer(
         file_id=file_id,
     )
     if row is not None:
-        return row
+        return _apply_media_album_caption_for_transfer(db, row)
 
-    return db.execute(
+    row = db.execute(
         """
         SELECT *
         FROM file_record
@@ -601,6 +639,7 @@ def file_for_transfer(
         """,
         (telegram_id, unique_id),
     ).fetchone()
+    return _apply_media_album_caption_for_transfer(db, row)
 
 
 def update_transfer_status(
