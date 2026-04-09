@@ -96,6 +96,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_file_record_chat
             ON file_record (telegram_id, chat_id, type, message_id DESC);
 
+        CREATE INDEX IF NOT EXISTS idx_file_record_chat_date
+            ON file_record (telegram_id, chat_id, type, date DESC, message_id DESC);
+
         CREATE INDEX IF NOT EXISTS idx_file_record_album
             ON file_record (telegram_id, chat_id, media_album_id, type);
 
@@ -414,12 +417,9 @@ def list_files(
 
     order_by = "message_id DESC"
     if custom_sort:
-        order_by = f"{sort_column} {order.upper()}"
+        order_by = f"{sort_column} {order.upper()}, message_id DESC"
         if sort_column == "completion_date":
             where_clauses.append("completion_date IS NOT NULL")
-
-    count_where_sql = " AND ".join(where_clauses)
-    count_params = list(params)
 
     from_message_id = _safe_int(filters.get("fromMessageId"), 0)
     if from_message_id > 0:
@@ -445,14 +445,11 @@ def list_files(
     where_sql = " AND ".join(where_clauses)
     rows = conn.execute(
         f"SELECT * FROM file_record WHERE {where_sql} ORDER BY {order_by} LIMIT ?",
-        [*params, limit],
+        [*params, limit + 1],
     ).fetchall()
-
-    count_row = conn.execute(
-        f"SELECT COUNT(*) AS count FROM file_record WHERE {count_where_sql}",
-        count_params,
-    ).fetchone()
-    total_count = _safe_int(count_row["count"] if count_row else 0)
+    has_more = len(rows) > limit
+    if has_more:
+        rows = rows[:limit]
 
     thumbnail_ids = [
         str(row["thumbnail_unique_id"])
@@ -496,10 +493,10 @@ def list_files(
         )
         for row in rows
     ]
-    next_from_message_id = files[-1]["messageId"] if files else 0
+    next_from_message_id = files[-1]["messageId"] if has_more and files else 0
     return {
         "files": files,
-        "count": total_count,
+        "count": 1_000_000_000 if has_more and next_from_message_id > 0 else len(files),
         "size": len(files),
         "nextFromMessageId": next_from_message_id,
     }

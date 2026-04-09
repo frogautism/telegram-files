@@ -44,6 +44,67 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _list_limit(filters: dict[str, str]) -> int:
+    limit = _int_or_default(filters.get("limit"), 20)
+    if limit <= 0:
+        return 20
+    return min(limit, 200)
+
+
+def _merge_group_file_pages(
+    pages: list[dict[str, Any]], filters: dict[str, str]
+) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
+    has_more = False
+    for page in pages:
+        page_files = page.get("files")
+        if isinstance(page_files, list):
+            candidates.extend(item for item in page_files if isinstance(item, dict))
+        if _int_or_default(page.get("nextFromMessageId"), 0) > 0:
+            has_more = True
+
+    candidates.sort(
+        key=lambda item: (
+            _int_or_default(item.get("date"), 0),
+            _int_or_default(item.get("messageId"), 0),
+        ),
+        reverse=True,
+    )
+
+    limit = _list_limit(filters)
+    if len(candidates) > limit:
+        has_more = True
+        candidates = candidates[:limit]
+
+    next_from_message_id = (
+        _int_or_default(candidates[-1].get("messageId"), 0)
+        if has_more and candidates
+        else 0
+    )
+    return {
+        "files": candidates,
+        "count": 1_000_000_000
+        if has_more and next_from_message_id > 0
+        else len(candidates),
+        "size": len(candidates),
+        "nextFromMessageId": next_from_message_id,
+    }
+
+
+def _sum_file_type_counts(results: list[dict[str, int]]) -> dict[str, int]:
+    totals = {
+        "media": 0,
+        "photo": 0,
+        "video": 0,
+        "audio": 0,
+        "file": 0,
+    }
+    for result in results:
+        for key in totals:
+            totals[key] += _int_or_default(result.get(key), 0)
+    return totals
+
+
 @router.get("/files/count")
 def files_count(db: sqlite3.Connection = Depends(get_db)) -> dict[str, int]:
     return get_files_count(db)
@@ -72,7 +133,8 @@ async def telegram_files(
             )
 
         config: AppConfig = request.app.state.config
-        account = get_telegram_account(
+        account = await asyncio.to_thread(
+            get_telegram_account,
             db,
             telegram_id=telegramId,
             app_root=str(config.app_root),
@@ -95,7 +157,13 @@ async def telegram_files(
                 content={"error": str(exc)},
             )
 
-    db_result = list_files(db, telegram_id=telegramId, chat_id=chatId, filters=filters)
+    db_result = await asyncio.to_thread(
+        list_files,
+        db,
+        telegram_id=telegramId,
+        chat_id=chatId,
+        filters=filters,
+    )
     offline_requested = _bool_or_none(filters.get("offline")) is True
     if offline_requested:
         return db_result
@@ -109,7 +177,8 @@ async def telegram_files(
             td_manager = _tdlib_manager_from_app(request.app)
             if td_manager is not None:
                 config: AppConfig = request.app.state.config
-                account = get_telegram_account(
+                account = await asyncio.to_thread(
+                    get_telegram_account,
                     db,
                     telegram_id=telegramId,
                     app_root=str(config.app_root),
@@ -134,7 +203,8 @@ async def telegram_files(
                             upsert_file_record=_db_upsert_tdlib_file_record,
                         )
                         if changed:
-                            return list_files(
+                            return await asyncio.to_thread(
+                                list_files,
                                 db,
                                 telegram_id=telegramId,
                                 chat_id=chatId,
@@ -155,7 +225,8 @@ async def telegram_files(
         return db_result
 
     config: AppConfig = request.app.state.config
-    account = get_telegram_account(
+    account = await asyncio.to_thread(
+        get_telegram_account,
         db,
         telegram_id=telegramId,
         app_root=str(config.app_root),
@@ -184,13 +255,18 @@ async def telegram_files(
 
 
 @router.get("/telegram/{telegramId}/chat-group/{groupId}/files")
-def telegram_chat_group_files(
+async def telegram_chat_group_files(
     telegramId: int,
     groupId: str,
     request: Request,
     db: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, Any]:
-    group = get_chat_group(db, telegram_id=telegramId, group_id=groupId)
+    group = await asyncio.to_thread(
+        get_chat_group,
+        db,
+        telegram_id=telegramId,
+        group_id=groupId,
+    )
     if group is None:
         raise HTTPException(status_code=404, detail="Group chat not found.")
 
@@ -200,12 +276,30 @@ def telegram_chat_group_files(
         if isinstance(raw_chat_ids, list)
         else []
     )
-    return list_files(
+    filters = _get_filters(request)
+    sort = (filters.get("sort") or "").strip().lower()
+    order = (filters.get("order") or "desc").strip().lower()
+    if chat_ids and sort == "date" and order == "desc":
+        pages: list[dict[str, Any]] = []
+        for chat_id in chat_ids:
+            pages.append(
+                await asyncio.to_thread(
+                    list_files,
+                    db,
+                    telegram_id=telegramId,
+                    chat_id=chat_id,
+                    filters=filters,
+                )
+            )
+        return _merge_group_file_pages(pages, filters)
+
+    return await asyncio.to_thread(
+        list_files,
         db,
         telegram_id=telegramId,
         chat_id=0,
         chat_ids=chat_ids,
-        filters=_get_filters(request),
+        filters=filters,
     )
 
 
@@ -217,7 +311,12 @@ async def telegram_files_count(
     offline: bool = Query(default=False),
     db: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:
-    db_result = count_files_by_type(db, telegram_id=telegramId, chat_id=chatId)
+    db_result = await asyncio.to_thread(
+        count_files_by_type,
+        db,
+        telegram_id=telegramId,
+        chat_id=chatId,
+    )
     if offline:
         return db_result
 
@@ -248,12 +347,17 @@ async def telegram_files_count(
 
 
 @router.get("/telegram/{telegramId}/chat-group/{groupId}/files/count")
-def telegram_chat_group_files_count(
+async def telegram_chat_group_files_count(
     telegramId: int,
     groupId: str,
     db: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:
-    group = get_chat_group(db, telegram_id=telegramId, group_id=groupId)
+    group = await asyncio.to_thread(
+        get_chat_group,
+        db,
+        telegram_id=telegramId,
+        group_id=groupId,
+    )
     if group is None:
         raise HTTPException(status_code=404, detail="Group chat not found.")
 
@@ -263,7 +367,21 @@ def telegram_chat_group_files_count(
         if isinstance(raw_chat_ids, list)
         else []
     )
-    return count_files_by_type(
+    if chat_ids:
+        results: list[dict[str, int]] = []
+        for chat_id in chat_ids:
+            results.append(
+                await asyncio.to_thread(
+                    count_files_by_type,
+                    db,
+                    telegram_id=telegramId,
+                    chat_id=chat_id,
+                )
+            )
+        return _sum_file_type_counts(results)
+
+    return await asyncio.to_thread(
+        count_files_by_type,
         db,
         telegram_id=telegramId,
         chat_id=0,
@@ -320,7 +438,8 @@ async def file_preview(
     request: Request,
     db: sqlite3.Connection = Depends(get_db),
 ) -> FileResponse:
-    info = get_file_preview_info(
+    info = await asyncio.to_thread(
+        get_file_preview_info,
         db,
         telegram_id=telegramId,
         unique_id=uniqueId,
@@ -342,7 +461,8 @@ async def file_preview(
         td_manager = _tdlib_manager_from_app(request.app)
         if td_manager is not None:
             config: AppConfig = request.app.state.config
-            account = get_telegram_account(
+            account = await asyncio.to_thread(
+                get_telegram_account,
                 db,
                 telegram_id=telegramId,
                 app_root=str(config.app_root),
