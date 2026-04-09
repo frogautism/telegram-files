@@ -3,7 +3,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import { LoaderPinwheel, SquareChevronLeft, WandSparkles } from "lucide-react";
+import {
+  Download,
+  LoaderCircle,
+  LoaderPinwheel,
+  SquareChevronLeft,
+  WandSparkles,
+} from "lucide-react";
 import { useFiles } from "@/hooks/use-files";
 import FileNotFount from "@/components/file-not-found";
 import type { TelegramFile } from "@/lib/types";
@@ -25,6 +31,9 @@ import SpoiledWrapper from "@/components/spoiled-wrapper";
 import FileCaptionText from "@/components/file-caption-text";
 import { groupFilesByMessage, type FileGroup } from "@/lib/file-groups";
 import { formatDistanceToNow } from "date-fns";
+import useSWRMutation from "swr/mutation";
+import { POST } from "@/lib/api";
+import { toast } from "@/hooks/use-toast";
 
 interface FileTableProps {
   accountId: string;
@@ -297,7 +306,6 @@ function FilePinGroup({
             onFileClick={() => onFileClick(file)}
             onTagClick={onTagClick}
             updateField={updateField}
-            grouped={false}
           />
         </div>
       </div>
@@ -309,23 +317,37 @@ function FilePinGroup({
     group.files.find((file) => file.caption.trim() !== "")?.caption ?? "";
   const totalSize = group.files.reduce((sum, file) => sum + file.size, 0);
   const gridCols = group.files.length >= 5 ? "grid-cols-3" : "grid-cols-2";
+  const groupStatuses = summarizeGroupStatuses(group.files);
 
   return (
     <div className="mb-3 break-inside-avoid">
       <div className="overflow-hidden rounded-[4px] border border-border bg-card">
         <div className="space-y-3 p-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <Badge variant="secondary" className="text-xs">
-              {group.files.length} items
-            </Badge>
-            <span>{prettyBytes(totalSize)}</span>
-            <span>&bull;</span>
-            <span>
-              {formatDistanceToNow(new Date(firstFile.date * 1000), {
-                addSuffix: true,
-              })}
-            </span>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <Badge variant="secondary" className="text-xs">
+                {group.files.length} items
+              </Badge>
+              <span>{prettyBytes(totalSize)}</span>
+              <span>&bull;</span>
+              <span>
+                {formatDistanceToNow(new Date(firstFile.date * 1000), {
+                  addSuffix: true,
+                })}
+              </span>
+            </div>
+            <MessageGroupDownloadButton files={group.files} />
           </div>
+
+          {groupStatuses.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {groupStatuses.map((status) => (
+                <Badge key={status.label} variant="outline" className="text-[11px]">
+                  {status.count} {status.label}
+                </Badge>
+              ))}
+            </div>
+          )}
 
           {caption && (
             <SpoiledWrapper hasSensitiveContent={firstFile.hasSensitiveContent}>
@@ -339,55 +361,210 @@ function FilePinGroup({
 
           <div className={cn("grid gap-2", gridCols)}>
             {group.files.map((file, index) => (
-              <div
+              <GroupedFilePinItem
                 key={`${file.messageId}-${file.uniqueId}`}
-                className="space-y-1.5 rounded-[4px] border border-border p-1.5"
-              >
-                <div className="relative">
-                  <div
-                    className="absolute left-2 top-2 z-10"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <Checkbox
-                      checked={selectedFiles.has(file.id)}
-                      onCheckedChange={() => onCheckedChange(file.id)}
-                    />
-                  </div>
-                  <Badge className="absolute right-2 top-2 z-10 text-[11px]">
-                    {index + 1}
-                  </Badge>
-                  <button
-                    type="button"
-                    className="block w-full overflow-hidden rounded-[4px] bg-muted text-left"
-                    onClick={() => onFileClick(file)}
-                  >
-                    <div className="aspect-square overflow-hidden">
-                      <FileImage
-                        file={file}
-                        className="h-full w-full object-cover"
-                      />
-                    </div>
-                  </button>
-                </div>
-
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0 text-xs text-muted-foreground">
-                    <div className="truncate font-medium text-foreground">
-                      {file.type === "video" ? "Video" : "Photo"}
-                    </div>
-                    <div className="truncate">{prettyBytes(file.size)}</div>
-                  </div>
-                  <div onClick={(event) => event.stopPropagation()}>
-                    <FileControl file={file} hovered={true} />
-                  </div>
-                </div>
-              </div>
+                file={file}
+                index={index}
+                checked={selectedFiles.has(file.id)}
+                onCheckedChange={() => onCheckedChange(file.id)}
+                onFileClick={() => onFileClick(file)}
+              />
             ))}
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+function GroupedFilePinItem({
+  file,
+  index,
+  checked,
+  onCheckedChange,
+  onFileClick,
+}: {
+  file: TelegramFile;
+  index: number;
+  checked: boolean;
+  onCheckedChange: () => void;
+  onFileClick: () => void;
+}) {
+  const { settings } = useSettings();
+  const { downloadProgress, downloadSpeed } = useFileSpeed(file);
+
+  return (
+    <div className="space-y-2 rounded-[4px] border border-border p-1.5">
+      <div className="relative">
+        <div
+          className="absolute left-2 top-2 z-10"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <Checkbox checked={checked} onCheckedChange={onCheckedChange} />
+        </div>
+        <Badge className="absolute right-2 top-2 z-10 text-[11px]">
+          {index + 1}
+        </Badge>
+        <button
+          type="button"
+          className="block w-full overflow-hidden rounded-[4px] bg-muted text-left"
+          onClick={onFileClick}
+        >
+          <div className="aspect-square overflow-hidden">
+            <FileImage file={file} className="h-full w-full object-cover" />
+          </div>
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0 text-xs text-muted-foreground">
+            <div className="truncate font-medium text-foreground">
+              {file.type === "video" ? "Video" : "Photo"}
+            </div>
+            <div className="truncate">{prettyBytes(file.size)}</div>
+            {downloadSpeed > 0 && file.downloadStatus === "downloading" && (
+              <div className="truncate">
+                {prettyBytes(downloadSpeed, {
+                  bits: settings?.speedUnits === "bits",
+                })}
+                /s
+              </div>
+            )}
+          </div>
+          <div onClick={(event) => event.stopPropagation()}>
+            <FileControl file={file} hovered={true} />
+          </div>
+        </div>
+
+        <FileStatus file={file} className="justify-start" />
+
+        {downloadProgress > 0 && downloadProgress !== 100 && (
+          <div className="space-y-1">
+            <Progress value={downloadProgress} />
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>{downloadProgress.toFixed(0)}%</span>
+              <span>{prettyBytes(file.downloadedSize)}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MessageGroupDownloadButton({ files }: { files: TelegramFile[] }) {
+  const downloadableFiles = files.filter(
+    (file) => file.downloadStatus === "idle" || file.downloadStatus === "error",
+  );
+  const { trigger, isMutating } = useSWRMutation(
+    "/files/start-download-multiple",
+    (
+      key,
+      {
+        arg,
+      }: {
+        arg: {
+          files: Array<{
+            telegramId: number;
+            chatId: number;
+            messageId: number;
+            fileId: number;
+            uniqueId: string;
+          }>;
+        };
+      },
+    ) => POST(key, arg),
+  );
+
+  if (downloadableFiles.length === 0) {
+    return null;
+  }
+
+  const handleClick = async () => {
+    try {
+      const result = (await trigger({
+        files: downloadableFiles.map((file) => ({
+          telegramId: file.telegramId ?? 0,
+          chatId: file.chatId ?? 0,
+          messageId: file.messageId ?? 0,
+          fileId: file.id ?? 0,
+          uniqueId: file.uniqueId,
+        })),
+      })) as { processed?: number; failed?: number } | undefined;
+
+      const processed = Math.max(
+        0,
+        Number(result?.processed ?? downloadableFiles.length),
+      );
+      const failed = Math.max(0, Number(result?.failed ?? 0));
+
+      if (processed === 0 && failed > 0) {
+        toast({
+          title: "Download failed",
+          description: "None of the items in this message could be started.",
+          variant: "error",
+        });
+        return;
+      }
+
+      toast({
+        title: failed > 0 ? "Download started with skips" : "Download started",
+        description:
+          failed > 0
+            ? `Started ${processed} items and skipped ${failed}.`
+            : `Started ${processed} items from this message.`,
+        variant: failed > 0 ? "warning" : "success",
+      });
+    } catch (error) {
+      toast({
+        title: "Download failed",
+        description:
+          error instanceof Error ? error.message : "Failed to start download.",
+        variant: "error",
+      });
+    }
+  };
+
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      className="shrink-0"
+      onClick={handleClick}
+      disabled={isMutating}
+    >
+      {isMutating ? (
+        <LoaderCircle className="h-4 w-4 animate-spin" />
+      ) : (
+        <Download className="h-4 w-4" />
+      )}
+      Download all ({downloadableFiles.length})
+    </Button>
+  );
+}
+
+function summarizeGroupStatuses(files: TelegramFile[]) {
+  const statusCounts = [
+    {
+      label: "downloading",
+      count: files.filter((file) => file.downloadStatus === "downloading").length,
+    },
+    {
+      label: "paused",
+      count: files.filter((file) => file.downloadStatus === "paused").length,
+    },
+    {
+      label: "transferring",
+      count: files.filter((file) => file.transferStatus === "transferring").length,
+    },
+    {
+      label: "completed",
+      count: files.filter((file) => file.downloadStatus === "completed").length,
+    },
+  ];
+
+  return statusCounts.filter((status) => status.count > 0);
 }
 
 function FilePinCard({
@@ -397,7 +574,6 @@ function FilePinCard({
   onFileClick,
   onTagClick,
   updateField,
-  grouped,
 }: {
   file: TelegramFile;
   checked: boolean;
@@ -408,7 +584,6 @@ function FilePinCard({
     uniqueId: string,
     patch: Partial<TelegramFile>,
   ) => Promise<void>;
-  grouped: boolean;
 }) {
   const { settings } = useSettings();
   const { downloadProgress, downloadSpeed } = useFileSpeed(file);
