@@ -7,6 +7,7 @@ import {
   Download,
   LoaderCircle,
   LoaderPinwheel,
+  RefreshCw,
   SquareChevronLeft,
   WandSparkles,
 } from "lucide-react";
@@ -57,6 +58,7 @@ export function FileTable({
     handleFilterChange,
     clearFilters,
     isLoading,
+    reload,
     size,
     files,
     hasMore,
@@ -66,6 +68,7 @@ export function FileTable({
     TelegramFile | undefined
   >();
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [isReloading, setIsReloading] = useState(false);
   const fileGroups = useMemo(() => groupFilesByMessage(files), [files]);
 
   useEffect(() => {
@@ -157,6 +160,20 @@ export function FileTable({
     });
   };
 
+  const handleReload = async () => {
+    setIsReloading(true);
+    try {
+      await reload();
+    } catch {
+      toast({
+        variant: "error",
+        description: "Failed to refresh files.",
+      });
+    } finally {
+      setIsReloading(false);
+    }
+  };
+
   return (
     <>
       {currentViewFile && (
@@ -208,11 +225,24 @@ export function FileTable({
             )}
           </div>
 
-          <Button variant="outline" size="sm" onClick={toggleSelectAll}>
-            {selectedFiles.size === files.length && files.length > 0
-              ? "Clear selection"
-              : "Select visible"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleReload()}
+              disabled={isReloading}
+            >
+              <RefreshCw
+                className={cn("h-4 w-4", isReloading && "animate-spin")}
+              />
+              Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={toggleSelectAll}>
+              {selectedFiles.size === files.length && files.length > 0
+                ? "Clear selection"
+                : "Select visible"}
+            </Button>
+          </div>
         </div>
 
         <FileBatchControl

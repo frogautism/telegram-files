@@ -332,11 +332,17 @@ export function useFiles(
     }, false);
   };
 
+  const reload = async () => {
+    setLatestFileStatus({});
+    await mutate();
+  };
+
   return {
     size,
     files,
     filters,
     isLoading: debounceLoading,
+    reload,
     updateField,
     handleFilterChange,
     clearFilters,

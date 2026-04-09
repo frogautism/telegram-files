@@ -1,4 +1,4 @@
-import { LoaderPinwheel } from "lucide-react";
+import { LoaderPinwheel, RefreshCw } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { useFiles } from "@/hooks/use-files";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
@@ -13,6 +13,8 @@ import { useLocalStorage } from "@/hooks/use-local-storage";
 import FileNotFount from "@/components/file-not-found";
 import { MobileFileTagsDrawer } from "@/components/file-tags";
 import { getFileGroupKey } from "@/lib/file-groups";
+import { Button } from "@/components/ui/button";
+import { toast } from "@/hooks/use-toast";
 
 interface FileListProps {
   accountId: string;
@@ -30,6 +32,7 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
   >();
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isTagsDrawerOpen, setIsTagsDrawerOpen] = useState(false);
+  const [isReloading, setIsReloading] = useState(false);
   const [layout] = useLocalStorage<"detailed" | "gallery">(
     "telegramFileLayout",
     "gallery",
@@ -41,6 +44,7 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
     handleFilterChange,
     clearFilters,
     isLoading,
+    reload,
     size,
     files,
     hasMore,
@@ -52,6 +56,20 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
       ...filters,
       search: tag,
     });
+  };
+
+  const handleReload = async () => {
+    setIsReloading(true);
+    try {
+      await reload();
+    } catch {
+      toast({
+        variant: "error",
+        description: "Failed to refresh files.",
+      });
+    } finally {
+      setIsReloading(false);
+    }
   };
 
   const rowVirtual = useWindowVirtualizer({
@@ -107,6 +125,17 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
 
   return (
     <div className="space-y-4 pb-6">
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void handleReload()}
+          disabled={isReloading}
+        >
+          <RefreshCw className={cn("h-4 w-4", isReloading && "animate-spin")} />
+          Refresh
+        </Button>
+      </div>
       {!link && (
         <DraggableElement>
           <FileFilters
