@@ -18,6 +18,7 @@ import { Switch } from "@/components/ui/switch";
 import { type SettingKey } from "@/lib/types";
 import { Slider } from "@/components/ui/slider";
 import { TagsInput } from "@/components/ui/tags-input";
+import { Input } from "@/components/ui/input";
 import { split } from "lodash";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
 import useSWRMutation from "swr/mutation";
@@ -39,6 +40,17 @@ type MaintenanceResponse = {
   thumbnail?: MaintenanceStats;
 };
 
+type PinToggleResponse = {
+  enabled: boolean;
+};
+
+type OfflineResetResponse = {
+  filesDeleted: number;
+  statisticsDeleted: number;
+  automationStateReset: number;
+  groupAutomationReset: number;
+};
+
 export default function SettingsForm() {
   const { settings, setSetting, updateSettings } = useSettings();
   const { account } = useTelegramAccount();
@@ -46,6 +58,10 @@ export default function SettingsForm() {
   const { toast } = useToast();
   const [lastMaintenanceResult, setLastMaintenanceResult] =
     useState<MaintenanceResponse | null>(null);
+  const [currentPin, setCurrentPin] = useState("");
+  const [newPin, setNewPin] = useState("");
+  const [resetPin, setResetPin] = useState("");
+  const pinEnabled = String(settings?.offlineResetPinEnabled ?? "false") === "true";
 
   const avgSpeedIntervalOptions = [
     { value: "60", label: "1 minute" },
@@ -78,6 +94,26 @@ export default function SettingsForm() {
           album: arg.album,
           thumbnail: arg.thumbnail,
         }) as Promise<MaintenanceResponse>,
+    );
+
+  const { trigger: triggerSetPin, isMutating: isSavingPin } = useSWRMutation(
+    "/settings/offline-reset-pin",
+    (key: string, { arg }: { arg: { pin: string; currentPin?: string } }) =>
+      POST(key, arg) as Promise<PinToggleResponse>,
+  );
+
+  const { trigger: triggerClearPin, isMutating: isClearingPin } =
+    useSWRMutation(
+      "/settings/offline-reset-pin/clear",
+      (key: string, { arg }: { arg: { currentPin: string } }) =>
+        POST(key, arg) as Promise<PinToggleResponse>,
+    );
+
+  const { trigger: triggerOfflineReset, isMutating: isResettingOfflineData } =
+    useSWRMutation(
+      "/settings/offline-data/reset",
+      (key: string, { arg }: { arg: { pin: string } }) =>
+        POST(key, arg) as Promise<OfflineResetResponse>,
     );
 
   const handleRunMaintenance = async (
@@ -116,6 +152,72 @@ export default function SettingsForm() {
       toast({
         variant: "error",
         title: "Maintenance failed",
+        description:
+          error instanceof Error ? error.message : "Request failed.",
+      });
+    }
+  };
+
+  const handleSavePin = async () => {
+    try {
+      await triggerSetPin({
+        pin: newPin,
+        currentPin: pinEnabled ? currentPin : undefined,
+      });
+      await setSetting("offlineResetPinEnabled", "true");
+      setCurrentPin("");
+      setNewPin("");
+      toast({
+        variant: "success",
+        title: pinEnabled ? "PIN updated" : "PIN enabled",
+        description: "Offline reset protection is active.",
+      });
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "PIN update failed",
+        description:
+          error instanceof Error ? error.message : "Request failed.",
+      });
+    }
+  };
+
+  const handleClearPin = async () => {
+    try {
+      await triggerClearPin({ currentPin });
+      await setSetting("offlineResetPinEnabled", "false");
+      setCurrentPin("");
+      setNewPin("");
+      setResetPin("");
+      toast({
+        variant: "success",
+        title: "PIN removed",
+        description: "Offline reset now has no configured PIN.",
+      });
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "PIN removal failed",
+        description:
+          error instanceof Error ? error.message : "Request failed.",
+      });
+    }
+  };
+
+  const handleResetOfflineData = async () => {
+    try {
+      const result = await triggerOfflineReset({ pin: resetPin });
+      setResetPin("");
+      toast({
+        variant: "success",
+        title: "Offline data cleared",
+        description:
+          `Deleted ${result.filesDeleted} cached files and ${result.statisticsDeleted} statistics rows.`,
+      });
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Offline reset failed",
         description:
           error instanceof Error ? error.message : "Request failed.",
       });
@@ -218,6 +320,128 @@ export default function SettingsForm() {
                 </div>
               </div>
             )}
+          </div>
+        </SettingsSection>
+        <SettingsSection title="Offline reset">
+          <div className="space-y-4">
+            <div className="rounded-[4px] bg-muted px-4 py-3 text-sm text-muted-foreground">
+              This clears the local offline database cache for all accounts,
+              including cached file rows, thumbnail rows, and statistics. It
+              also resets automation progress so the cache can be rebuilt.
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-3 rounded-[4px] border border-border p-4">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Reset PIN</p>
+                  <p className="text-xs text-muted-foreground">
+                    Use a 4-12 digit PIN to protect the reset action.
+                  </p>
+                </div>
+                {pinEnabled && (
+                  <div className="space-y-2">
+                    <Label htmlFor="current-offline-reset-pin">Current PIN</Label>
+                    <Input
+                      id="current-offline-reset-pin"
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="current-password"
+                      placeholder="Current PIN"
+                      value={currentPin}
+                      onChange={(event) => setCurrentPin(event.target.value)}
+                    />
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <Label htmlFor="new-offline-reset-pin">
+                    {pinEnabled ? "New PIN" : "Set PIN"}
+                  </Label>
+                  <Input
+                    id="new-offline-reset-pin"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="new-password"
+                    placeholder="4-12 digits"
+                    value={newPin}
+                    onChange={(event) => setNewPin(event.target.value)}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={isSavingPin || !newPin || (pinEnabled && !currentPin)}
+                    onClick={() => void handleSavePin()}
+                  >
+                    {isSavingPin ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : pinEnabled ? (
+                      "Update PIN"
+                    ) : (
+                      "Enable PIN"
+                    )}
+                  </Button>
+                  {pinEnabled && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={isClearingPin || !currentPin}
+                      onClick={() => void handleClearPin()}
+                    >
+                      {isClearingPin ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Clearing...
+                        </>
+                      ) : (
+                        "Clear PIN"
+                      )}
+                    </Button>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-3 rounded-[4px] border border-destructive/30 bg-destructive/5 p-4">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    Reset offline data
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    This is destructive. Telegram accounts, chat groups, proxies,
+                    and settings stay intact, but cached offline file data is
+                    removed.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="offline-reset-confirm-pin">Enter PIN</Label>
+                  <Input
+                    id="offline-reset-confirm-pin"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="off"
+                    placeholder={pinEnabled ? "PIN required" : "Set a PIN first"}
+                    value={resetPin}
+                    onChange={(event) => setResetPin(event.target.value)}
+                    disabled={!pinEnabled}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={!pinEnabled || !resetPin || isResettingOfflineData}
+                  onClick={() => void handleResetOfflineData()}
+                >
+                  {isResettingOfflineData ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Resetting...
+                    </>
+                  ) : (
+                    "Reset offline data"
+                  )}
+                </Button>
+              </div>
+            </div>
           </div>
         </SettingsSection>
         <SettingsSection title="Speed units">

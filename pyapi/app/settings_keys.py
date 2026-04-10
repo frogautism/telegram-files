@@ -11,6 +11,7 @@ DEFAULT_SETTINGS: dict[str, object | None] = {
     "avgSpeedInterval": 5 * 60,
     "speedUnits": "bits",
     "tags": None,
+    "offlineResetPinEnabled": False,
 }
 
 

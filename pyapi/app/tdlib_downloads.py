@@ -58,6 +58,11 @@ def cache_tdlib_file_preview(
         _TDLIB_FILE_PREVIEW_CACHE[key] = current
 
 
+def reset_tdlib_file_preview_cache() -> None:
+    with _PREVIEW_CACHE_LOCK:
+        _TDLIB_FILE_PREVIEW_CACHE.clear()
+
+
 def _evict_tdlib_file_preview(
     *,
     telegram_id: int,

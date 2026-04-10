@@ -154,6 +154,7 @@ export const SettingKeys = [
   "avgSpeedInterval",
   "speedUnits",
   "tags",
+  "offlineResetPinEnabled",
 ] as const;
 
 export type SettingKey = (typeof SettingKeys)[number];
