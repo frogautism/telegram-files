@@ -51,6 +51,48 @@ class GroupChatSearchTest(unittest.TestCase):
         self.assertEqual(kwargs["chat_ids"], [100, 200])
         self.assertEqual(kwargs["filters"]["search"], "#cat")
 
+    def test_group_pagination_uses_single_combined_query(self) -> None:
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/telegram/1/chat-group/group-1/files",
+                "query_string": (
+                    b"sort=date&order=desc&type=media&offline=true"
+                    b"&fromMessageId=123&fromSortField=1710000000"
+                ),
+                "headers": [],
+            }
+        )
+
+        with (
+            patch(
+                "app.routers.files.get_chat_group",
+                return_value={"chatIds": [100, 200]},
+            ),
+            patch(
+                "app.routers.files.list_files",
+                return_value={
+                    "files": [],
+                    "count": 0,
+                    "size": 0,
+                    "nextFromMessageId": 0,
+                },
+            ) as list_files_mock,
+        ):
+            result = asyncio.run(
+                telegram_chat_group_files(1, "group-1", request, db=object())
+            )
+
+        self.assertEqual(result["size"], 0)
+        self.assertEqual(list_files_mock.call_count, 1)
+        _, kwargs = list_files_mock.call_args
+        self.assertEqual(kwargs["telegram_id"], 1)
+        self.assertEqual(kwargs["chat_id"], 0)
+        self.assertEqual(kwargs["chat_ids"], [100, 200])
+        self.assertEqual(kwargs["filters"]["fromMessageId"], "123")
+        self.assertEqual(kwargs["filters"]["fromSortField"], "1710000000")
+
     def test_list_files_search_matches_album_caption_entries(self) -> None:
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row

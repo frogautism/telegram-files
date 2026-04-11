@@ -44,53 +44,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _list_limit(filters: dict[str, str]) -> int:
-    limit = _int_or_default(filters.get("limit"), 20)
-    if limit <= 0:
-        return 20
-    return min(limit, 200)
-
-
-def _merge_group_file_pages(
-    pages: list[dict[str, Any]], filters: dict[str, str]
-) -> dict[str, Any]:
-    candidates: list[dict[str, Any]] = []
-    has_more = False
-    for page in pages:
-        page_files = page.get("files")
-        if isinstance(page_files, list):
-            candidates.extend(item for item in page_files if isinstance(item, dict))
-        if _int_or_default(page.get("nextFromMessageId"), 0) > 0:
-            has_more = True
-
-    candidates.sort(
-        key=lambda item: (
-            _int_or_default(item.get("date"), 0),
-            _int_or_default(item.get("messageId"), 0),
-        ),
-        reverse=True,
-    )
-
-    limit = _list_limit(filters)
-    if len(candidates) > limit:
-        has_more = True
-        candidates = candidates[:limit]
-
-    next_from_message_id = (
-        _int_or_default(candidates[-1].get("messageId"), 0)
-        if has_more and candidates
-        else 0
-    )
-    return {
-        "files": candidates,
-        "count": 1_000_000_000
-        if has_more and next_from_message_id > 0
-        else len(candidates),
-        "size": len(candidates),
-        "nextFromMessageId": next_from_message_id,
-    }
-
-
 def _sum_file_type_counts(results: list[dict[str, int]]) -> dict[str, int]:
     totals = {
         "media": 0,
@@ -277,23 +230,6 @@ async def telegram_chat_group_files(
         else []
     )
     filters = _get_filters(request)
-    sort = (filters.get("sort") or "").strip().lower()
-    order = (filters.get("order") or "desc").strip().lower()
-    has_search = bool((filters.get("search") or "").strip())
-    if chat_ids and sort == "date" and order == "desc" and not has_search:
-        pages: list[dict[str, Any]] = []
-        for chat_id in chat_ids:
-            pages.append(
-                await asyncio.to_thread(
-                    list_files,
-                    db,
-                    telegram_id=telegramId,
-                    chat_id=chat_id,
-                    filters=filters,
-                )
-            )
-        return _merge_group_file_pages(pages, filters)
-
     return await asyncio.to_thread(
         list_files,
         db,
