@@ -3,14 +3,12 @@
 *.iws
 
 out/
-*/.gradle
 **/*build*/
 
 /app/
 /app-test/
 
 **/*.log
-api.log.lck
 **/.env.*
 !**/.env.example
 

@@ -24,17 +24,10 @@
 .idea/**/uiDesigner.xml
 .idea/**/dbnavigator.xml
 
-# Gradle
-.idea/**/gradle.xml
+# IDE project metadata
 .idea/**/libraries
-
-# Gradle and Maven with auto-import
-# When using Gradle or Maven with auto-import, you should exclude module files,
-# since they will be recreated, and may cause churn.  Uncomment if using
-# auto-import.
 # .idea/artifacts
 # .idea/compiler.xml
-# .idea/jarRepositories.xml
 # .idea/modules.xml
 # .idea/*.iml
 # .idea/modules
@@ -76,30 +69,6 @@ fabric.properties
 
 # Android studio 3.1+ serialized cache file
 .idea/caches/build_file_checksums.ser
-
-
-### Gradle template
-api/.gradle
-api/build
-!src/**/build/
-
-# Ignore Gradle GUI config
-api/gradle-app.setting
-
-# Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
-api/!gradle-wrapper.jar
-
-# Avoid ignore Gradle wrappper properties
-api/!gradle-wrapper.properties
-
-# Cache of project
-api/.gradletasknamecache
-
-# Eclipse Gradle plugin generated files
-# Eclipse Core
-api/.project
-# JDT-specific (Eclipse Java Development Tools)
-api/.classpath
 
 
 ### NextJS template
@@ -146,5 +115,4 @@ app/
 
 **/.env.*
 !**/.env.example
-api.log.lck
 http-client.private.env.json

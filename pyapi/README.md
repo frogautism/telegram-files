@@ -1,6 +1,6 @@
-# Python Backend (Migration Phase)
+# Python Backend
 
-This directory contains the first phase of the backend migration from Java (Vert.x) to Python (FastAPI).
+This directory contains the FastAPI backend for telegram-files.
 
 ## Current status
 
@@ -42,7 +42,6 @@ This directory contains the first phase of the backend migration from Java (Vert
   - schema bootstrap for `setting_record`, `telegram_record`, `file_record`, `statistic_record`
 - Worker support
   - Background preload, auto-download, and transfer loops run in the Python backend
-  - Behavior is migration-phase and keeps compatibility as the primary goal
 
 ## Run locally
 
@@ -75,7 +74,7 @@ it will fall back to Python package `tdjson` when available in the runtime envir
 
 ## Notes
 
-- This phase is intentionally API-compatible for settings, account metadata, and offline file routes.
+- The backend is API-compatible for settings, account metadata, and offline file routes.
 - Auto transfer supports `DIRECT`, `GROUP_BY_CHAT`, `GROUP_BY_TYPE`, and `GROUP_BY_AI`.
 - WebSocket `/ws` emits authorization and method-result events for TDLib login when TDLib is configured.
 - Remaining route handlers are registered so clients receive explicit `501` responses instead of `404`.

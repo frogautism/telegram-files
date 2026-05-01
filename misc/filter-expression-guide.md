@@ -1,13 +1,13 @@
 # Filter Expression 使用指南
 
-- Filter Expression 使用 `commons-jexl3` 表达式语言，允许用户编写灵活的过滤规则来筛选消息。
+- Filter Expression 使用 Python 后端的安全表达式求值器，允许用户编写灵活的过滤规则来筛选消息。
 - 表达式必须返回布尔值，表达式为 true 的消息会被保留（通过）。
 - 可以直接访问 TdApi.Message 的字段（如 id、chatId、date、content 等）以及注入的 `f`（FileRecord）。
 - 可使用已注册的命名空间函数（如 str:contains(...)、re:isMatch(...)、num:... 等）。
 
 常用操作符与调用形式
 
-- 逻辑：&&, ||, !
+- 逻辑：and, or, not
 - 比较：==, !=, >, <, >=, <=
 - 算术：+ - * / %
 - 命名空间函数：namespace:method(arg1, arg2)（示例：str:contains(...)、re:isMatch(...)）
@@ -40,14 +40,14 @@
 
 - 按 id 或 chatId 过滤
     - id > 1000
-    - chatId == 1234567890
+    - chat_id == 1234567890
 
 - 按发送者或方向
-    - senderUserId == 99999
-    - isOutgoing == true
+    - sender_user_id == 99999
+    - is_outgoing == True
 
 - 日期范围
-    - date >= 1672531200 && date <= 1672617600
+    - date >= 1672531200 and date <= 1672617600
 
 媒体类型与大小（通过 content 直接访问）
 
@@ -62,7 +62,7 @@ FileRecord（别名 f）常用方法写法
 
 - 按文件大小与类型
     - f.size() > 1048576
-    - f.type() == 'video' || f.type() == 'photo'
+    - f.type() == 'video' or f.type() == 'photo'
 
 - 按文件名 / 后缀 / MIME
     - str:contains(f.fileName(), 'report')
@@ -71,7 +71,5 @@ FileRecord（别名 f）常用方法写法
 
 参考文档
 
-- [JEXL 3 文档](https://commons.apache.org/proper/commons-jexl/reference/syntax.html)
+- [Python 表达式文档](https://docs.python.org/3/reference/expressions.html)
 - [TdApi.Message 文档](https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1message.html)
-- [Hutool 工具类文档](https://www.hutool.cn/docs)
-- [FileRecord 类文档](../api/src/main/java/telegram/files/repository/FileRecord.java)

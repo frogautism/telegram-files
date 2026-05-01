@@ -104,8 +104,8 @@ On unRaid, install from the Community Repositories by searching for `telegram-fi
 
 Before getting started with telegram-files, ensure your runtime environment meets the following requirements:
 
-- **Programming Language:** JDK23,TypeScript,Python 3.11+
-- **Package Manager:** Gradle,Npm,Pip
+- **Programming Language:** TypeScript, Python 3.11+
+- **Package Manager:** npm, pip
 - **Container Runtime:** Docker
 
 ### ⚙️ Installation
@@ -136,15 +136,7 @@ cd web
 npm install
 ```
 
-**Using `gradle`**
-&nbsp; [<img align="center" src="https://img.shields.io/badge/Gradle-02303A.svg?style={badge_style}&logo=gradle&logoColor=white" />](https://gradle.org/)
-
-```sh
-cd api
-gradle build
-```
-
-**Using `python` (migration backend)**
+**Using `python` (backend)**
 
 ```sh
 cd pyapi
@@ -218,11 +210,6 @@ refer to the [LICENSE](LICENSE) file.
 ---
 
 ## 🆗 FAQs
-
-~~**Q.** Can't start the api server, error：`java.lang.UnsatisfiedLinkError: no tdjni in java.library.path`~~
-
-~~**A.** Maybe download tdlib failed, you can see the [entrypoint.sh](entrypoint.sh) file, then download tdlib
-manually.~~
 
 **Q.** Web's spoiler is static, how to solve it?
 
