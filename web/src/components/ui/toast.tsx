@@ -29,16 +29,16 @@ const toastVariants = cva(
   {
     variants: {
       variant: {
-        default: "border bg-background text-foreground",
+        default: "border bg-card text-foreground shadow-pop",
         destructive:
-          "destructive group border-destructive bg-destructive text-destructive-foreground",
+          "destructive group border-destructive bg-destructive text-destructive-foreground shadow-pop",
         success:
-          "border-l-4 border-l-green-500 bg-background text-green-700 dark:text-green-300",
+          "border-l-4 border-l-success border-border bg-card text-foreground shadow-pop",
         error:
-          "border-l-4 border-l-red-500 bg-background text-red-700 dark:text-red-300",
+          "border-l-4 border-l-destructive border-border bg-card text-foreground shadow-pop",
         warning:
-          "border-l-4 border-l-amber-500 bg-background text-amber-700 dark:text-amber-300",
-        info: "border-l-4 border-l-blue-500 bg-background text-blue-700 dark:text-blue-300",
+          "border-l-4 border-l-warning border-border bg-card text-foreground shadow-pop",
+        info: "border-l-4 border-l-info border-border bg-card text-foreground shadow-pop",
       },
     },
     defaultVariants: {

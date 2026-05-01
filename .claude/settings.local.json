@@ -9,7 +9,9 @@
       "Bash(python -c \"from app.main import app; print\\('routes:', len\\(app.routes\\)\\)\")",
       "Bash(python -m pytest tests/test_transfer_ops.py -q)",
       "Bash(python -m unittest tests.test_transfer_ops -v)",
-      "Bash(python -m unittest discover -s tests -v)"
+      "Bash(python -m unittest discover -s tests -v)",
+      "Bash(xargs -0 sed -i 's/rounded-\\\\[4px\\\\]/rounded-md/g; s/rounded-\\\\[6px\\\\]/rounded-md/g')",
+      "Bash(npx tsc *)"
     ]
   }
 }

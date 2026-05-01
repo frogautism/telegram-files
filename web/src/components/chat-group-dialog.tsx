@@ -170,7 +170,7 @@ export default function ChatGroupDialog({
         </DialogHeader>
 
         <div className="grid gap-6 md:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <div className="space-y-3 rounded-[4px] border border-border p-4">
+          <div className="space-y-3 rounded-md border border-border p-4">
             <div className="flex items-center justify-between">
               <p className="text-sm font-medium">Existing groups</p>
               <Badge variant="secondary">{groups?.length ?? 0}</Badge>
@@ -184,7 +184,7 @@ export default function ChatGroupDialog({
                 (groups ?? []).map((group) => (
                   <div
                     key={group.id}
-                    className="rounded-[4px] border border-border p-3"
+                    className="rounded-md border border-border p-3"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div className="space-y-1">
@@ -222,7 +222,7 @@ export default function ChatGroupDialog({
             </div>
           </div>
 
-          <div className="space-y-4 rounded-[4px] border border-border p-4">
+          <div className="space-y-4 rounded-md border border-border p-4">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-medium">
                 {editingGroupId ? "Edit group" : "Create group"}
@@ -254,7 +254,7 @@ export default function ChatGroupDialog({
                   {selectedChatIds.length} selected
                 </Badge>
               </div>
-              <div className="max-h-72 space-y-2 overflow-y-auto rounded-[4px] border border-border p-3">
+              <div className="max-h-72 space-y-2 overflow-y-auto rounded-md border border-border p-3">
                 {availableChats.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
                     No chats available.
@@ -263,7 +263,7 @@ export default function ChatGroupDialog({
                   availableChats.map((chat) => (
                     <label
                       key={chat.id}
-                      className="flex cursor-pointer items-center gap-3 rounded-[4px] border border-border px-3 py-2"
+                      className="flex cursor-pointer items-center gap-3 rounded-md border border-border px-3 py-2"
                     >
                       <Checkbox
                         checked={selectedChatIds.includes(chat.id)}

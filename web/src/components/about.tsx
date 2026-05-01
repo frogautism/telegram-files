@@ -61,12 +61,12 @@ export default function About() {
             loop={true}
           />
           <div className="space-y-4">
-            <div className="flex flex-col items-center justify-center rounded-[4px] bg-muted p-4">
+            <div className="flex flex-col items-center justify-center rounded-md bg-muted p-4">
               <p className="text-sm font-medium text-muted-foreground">Author</p>
               <p>{projectInfo.author}</p>
             </div>
 
-            <div className="flex flex-col items-center justify-center rounded-[4px] bg-muted p-4">
+            <div className="flex flex-col items-center justify-center rounded-md bg-muted p-4">
               <p className="mb-1 text-sm font-medium text-muted-foreground">
                 Current Version
               </p>
@@ -84,7 +84,7 @@ export default function About() {
               )}
             </div>
 
-            <div className="flex flex-col items-center justify-center rounded-[4px] bg-muted p-4">
+            <div className="flex flex-col items-center justify-center rounded-md bg-muted p-4">
               <p className="mb-1 text-sm font-medium text-muted-foreground">
                 Latest Version
               </p>
@@ -103,7 +103,7 @@ export default function About() {
             </div>
 
             {isNewVersionAvailable && (
-              <div className="rounded-[4px] border border-border bg-muted px-4 py-3">
+              <div className="rounded-md border border-border bg-muted px-4 py-3">
                 <p className="text-sm text-foreground">
                   A new version ({githubData?.tag_name}) is available! Update
                   now.

@@ -206,7 +206,7 @@ function AutomationSection({
   children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-4 rounded-[4px] border border-border bg-card p-5">
+    <div className="space-y-4 rounded-md border border-border bg-card p-5">
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
           {title}
@@ -221,7 +221,7 @@ function AutomationSection({
 }
 
 function InfoPanel({ children }: { children: React.ReactNode }) {
-  return <div className="space-y-4 rounded-[4px] bg-muted p-4">{children}</div>;
+  return <div className="space-y-4 rounded-md bg-muted p-4">{children}</div>;
 }
 
 interface DownloadRuleProps {
@@ -271,7 +271,7 @@ function DownloadRule({ value, onChange }: DownloadRuleProps) {
           Advanced
         </AccordionTrigger>
         <AccordionContent>
-          <div className="flex flex-col space-y-4 rounded-[4px] bg-muted p-4">
+          <div className="flex flex-col space-y-4 rounded-md bg-muted p-4">
             <div className="flex flex-col space-y-2">
               <Label htmlFor="query-keyword">Query Keyword</Label>
               <Input
@@ -336,7 +336,7 @@ function DownloadRule({ value, onChange }: DownloadRuleProps) {
               </div>
             </div>
 
-            <div className="rounded-[4px] border border-border bg-card p-4">
+            <div className="rounded-md border border-border bg-card p-4">
               <div className="flex items-center justify-between">
                 <Label htmlFor="download-history">Download History</Label>
                 <Switch
@@ -355,7 +355,7 @@ function DownloadRule({ value, onChange }: DownloadRuleProps) {
                 only new files will be downloaded.
               </p>
             </div>
-            <div className="rounded-[4px] border border-border bg-card p-4">
+            <div className="rounded-md border border-border bg-card p-4">
               <div className="flex items-center justify-between">
                 <Label htmlFor="download-comment-files">
                   Download comment files
@@ -399,7 +399,7 @@ function TransferRule({ value, onChange }: TransferRuleProps) {
           Advanced
         </AccordionTrigger>
         <AccordionContent>
-          <div className="flex flex-col space-y-4 rounded-[4px] bg-muted p-4">
+          <div className="flex flex-col space-y-4 rounded-md bg-muted p-4">
             <div className="flex flex-col space-y-2">
               <Label htmlFor="destination">
                 Destination folder for auto transfer
@@ -480,7 +480,7 @@ function TransferRule({ value, onChange }: TransferRuleProps) {
               />
             </div>
 
-            <div className="rounded-[4px] border border-border bg-card p-4">
+            <div className="rounded-md border border-border bg-card p-4">
               <div className="flex items-center justify-between">
                 <Label htmlFor="transfer-history">Transfer History</Label>
                 <Switch
@@ -522,7 +522,7 @@ const PolicyLegends: Record<
           Transfer files to folders based on the chat name.
         </p>
         <p className="text-xs text-muted-foreground">Example:</p>
-        <p className="inline-block rounded-[4px] bg-card px-2 py-1 text-xs text-muted-foreground">
+        <p className="inline-block rounded-md bg-card px-2 py-1 text-xs text-muted-foreground">
           {"/${Destination Folder}/${Telegram Id}/${Chat Id}/${file}"}
         </p>
       </div>
@@ -537,7 +537,7 @@ const PolicyLegends: Record<
           All account files will be transferred to the same folder.
         </p>
         <p className="text-xs text-muted-foreground">Example:</p>
-        <p className="inline-block rounded-[4px] bg-card px-2 py-1 text-xs text-muted-foreground">
+        <p className="inline-block rounded-md bg-card px-2 py-1 text-xs text-muted-foreground">
           {"/${Destination Folder}/${File Type}/${file}"}
         </p>
       </div>
@@ -570,7 +570,7 @@ const PolicyLegends: Record<
         <p className="text-sm">
           You can write a prompt to guide the AI in classifying the files. Like:
         </p>
-        <p className="inline-block rounded-[4px] bg-card px-2 py-1 text-xs text-muted-foreground">
+        <p className="inline-block rounded-md bg-card px-2 py-1 text-xs text-muted-foreground">
           Classify the following file into one of the categories: Work,
           Personal, Important, Others. <br />
           File name: {"{file_name}"} <br />
@@ -648,7 +648,7 @@ function HashtagRulesEditor({
         {value.map((rule, index) => (
           <div
             key={index}
-            className="flex flex-col gap-2 rounded-[4px] border border-border bg-card p-3 sm:flex-row sm:items-center"
+            className="flex flex-col gap-2 rounded-md border border-border bg-card p-3 sm:flex-row sm:items-center"
           >
             <Input
               className="sm:w-32"

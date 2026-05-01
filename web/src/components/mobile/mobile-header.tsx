@@ -13,7 +13,6 @@ import { useTelegramAccount } from "@/hooks/use-telegram-account";
 import prettyBytes from "pretty-bytes";
 import Link from "next/link";
 import { Drawer as DrawerPrimitive } from "vaul";
-import TelegramIcon from "@/components/telegram-icon";
 import { Button } from "@/components/ui/button";
 import {
   Drawer,
@@ -41,23 +40,36 @@ export function MobileHeader() {
   const { settings } = useSettings();
 
   return (
-    <div className="sticky top-0 z-30 mb-3 border-b border-border bg-background">
-      <div className="flex w-full items-center justify-between py-3">
+    <div className="sticky top-0 z-30 -mx-4 mb-3 border-b border-border/80 bg-background/85 px-4 backdrop-blur-md">
+      <div className="flex h-12 w-full items-center justify-between">
         <Link href="/" className="inline-flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-[4px] bg-foreground text-background">
-            <TelegramIcon className="h-3.5 w-3.5" />
-          </div>
-          <span className="text-sm font-bold">TeleFiles</span>
+          <span className="relative inline-flex h-7 w-7 items-center justify-center overflow-hidden rounded-md border border-border bg-card shadow-card">
+            <span className="absolute inset-0 bg-[radial-gradient(120%_120%_at_0%_0%,hsl(var(--brand)/0.18),transparent_55%)]" />
+            <span className="relative font-display text-[15px] leading-none tracking-tight">
+              T
+            </span>
+            <span className="absolute -bottom-0.5 right-1 h-1 w-1 rounded-full bg-brand" />
+          </span>
+          <span className="font-display text-base leading-none tracking-tight">
+            TeleFiles
+          </span>
         </Link>
 
-        {accountDownloadSpeed !== 0 && (
-          <Badge variant="outline" className="gap-1.5 text-xs">
-            <Download className="h-3 w-3" />
-            {`${prettyBytes(accountDownloadSpeed, { bits: settings?.speedUnits === "bits" })}/s`}
-          </Badge>
-        )}
+        <div className="flex items-center gap-2">
+          {accountDownloadSpeed !== 0 && (
+            <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-info-soft px-2 text-[11px] font-medium text-info-soft-foreground">
+              <Download className="h-3 w-3" strokeWidth={2.25} />
+              <span className="font-mono tabular-nums">
+                {prettyBytes(accountDownloadSpeed, {
+                  bits: settings?.speedUnits === "bits",
+                })}
+                /s
+              </span>
+            </span>
+          )}
 
-        <MenuDrawer />
+          <MenuDrawer />
+        </div>
       </div>
     </div>
   );
@@ -93,7 +105,7 @@ function MenuDrawer() {
           aria-describedby={undefined}
         >
           <div className="flex h-full w-full grow flex-col border-r border-border bg-background p-4">
-            <DrawerTitle className="mb-6 text-base font-bold">
+            <DrawerTitle className="mb-6 font-display text-2xl tracking-tight">
               TeleFiles
             </DrawerTitle>
             <div className="flex h-full flex-col justify-between">
@@ -123,7 +135,7 @@ function MenuDrawer() {
                     Layout
                   </Label>
                   <Toggle
-                    className="w-full rounded-[4px] border border-input"
+                    className="w-full rounded-md border border-input"
                     pressed={layout === "gallery"}
                     onPressedChange={(pressed) => {
                       setLayout(pressed ? "gallery" : "detailed");

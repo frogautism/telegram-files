@@ -28,7 +28,7 @@ export default function FileCaptionText({
         <button
           key={`${token}-${start}`}
           type="button"
-          className="rounded px-0.5 text-primary transition-colors hover:underline focus-visible:underline focus-visible:outline-none"
+          className="rounded font-medium text-brand decoration-brand/50 underline-offset-2 transition-colors hover:underline focus-visible:underline focus-visible:outline-none"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();

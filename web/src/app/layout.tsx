@@ -1,6 +1,9 @@
 import "@/styles/globals.css";
 import type { Metadata } from "next";
 import React from "react";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
+import { Instrument_Serif } from "next/font/google";
 import { Toaster } from "@/components/ui/toaster";
 import { SWRProvider } from "@/components/swr-provider";
 import { SettingsProvider } from "@/hooks/use-settings";
@@ -10,9 +13,18 @@ import { TelegramAccountProvider } from "@/hooks/use-telegram-account";
 import { ThemeProvider } from "@/components/theme-provider";
 import { LocalStorageProvider } from "@/hooks/use-local-storage";
 
+const instrumentSerif = Instrument_Serif({
+  subsets: ["latin"],
+  weight: ["400"],
+  style: ["normal", "italic"],
+  variable: "--font-instrument-serif",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  title: "TeleFiles",
-  description: "Pinterest-inspired Telegram downloader and file board",
+  title: "TeleFiles — A quiet vault for your Telegram media",
+  description:
+    "An editorial, content-first home for the photos, videos, and files you save from Telegram.",
 };
 
 export default async function RootLayout({
@@ -21,7 +33,11 @@ export default async function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${GeistSans.variable} ${GeistMono.variable} ${instrumentSerif.variable}`}
+    >
       <head>
         <link
           rel="icon"
@@ -45,11 +61,12 @@ export default async function RootLayout({
           />
         )}
       </head>
-      <body className="min-h-screen bg-background font-mono text-foreground antialiased">
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">
         <LocalStorageProvider>
           <ThemeProvider
             attribute="class"
-            defaultTheme="dark"
+            defaultTheme="system"
+            enableSystem
             disableTransitionOnChange
           >
             <SWRProvider>
