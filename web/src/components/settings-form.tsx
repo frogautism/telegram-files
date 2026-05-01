@@ -23,6 +23,7 @@ import { split } from "lodash";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
 import useSWRMutation from "swr/mutation";
 import { POST } from "@/lib/api";
+import { safeJsonParse } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
 type MaintenanceStats = {
@@ -61,7 +62,8 @@ export default function SettingsForm() {
   const [currentPin, setCurrentPin] = useState("");
   const [newPin, setNewPin] = useState("");
   const [resetPin, setResetPin] = useState("");
-  const pinEnabled = String(settings?.offlineResetPinEnabled ?? "false") === "true";
+  const pinEnabled =
+    String(settings?.offlineResetPinEnabled ?? "false") === "true";
 
   const avgSpeedIntervalOptions = [
     { value: "60", label: "1 minute" },
@@ -116,9 +118,7 @@ export default function SettingsForm() {
         POST(key, arg) as Promise<OfflineResetResponse>,
     );
 
-  const handleRunMaintenance = async (
-    mode: "all" | "album" | "thumbnail",
-  ) => {
+  const handleRunMaintenance = async (mode: "all" | "album" | "thumbnail") => {
     if (!account?.id || account.status !== "active") {
       toast({
         variant: "error",
@@ -152,8 +152,7 @@ export default function SettingsForm() {
       toast({
         variant: "error",
         title: "Maintenance failed",
-        description:
-          error instanceof Error ? error.message : "Request failed.",
+        description: error instanceof Error ? error.message : "Request failed.",
       });
     }
   };
@@ -176,8 +175,7 @@ export default function SettingsForm() {
       toast({
         variant: "error",
         title: "PIN update failed",
-        description:
-          error instanceof Error ? error.message : "Request failed.",
+        description: error instanceof Error ? error.message : "Request failed.",
       });
     }
   };
@@ -198,8 +196,7 @@ export default function SettingsForm() {
       toast({
         variant: "error",
         title: "PIN removal failed",
-        description:
-          error instanceof Error ? error.message : "Request failed.",
+        description: error instanceof Error ? error.message : "Request failed.",
       });
     }
   };
@@ -211,15 +208,13 @@ export default function SettingsForm() {
       toast({
         variant: "success",
         title: "Offline data cleared",
-        description:
-          `Deleted ${result.filesDeleted} cached files and ${result.statisticsDeleted} statistics rows.`,
+        description: `Deleted ${result.filesDeleted} cached files and ${result.statisticsDeleted} statistics rows.`,
       });
     } catch (error) {
       toast({
         variant: "error",
         title: "Offline reset failed",
-        description:
-          error instanceof Error ? error.message : "Request failed.",
+        description: error instanceof Error ? error.message : "Request failed.",
       });
     }
   };
@@ -292,9 +287,9 @@ export default function SettingsForm() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Runs a manual repair pass for old records missing `media_album_id`,
-              captions, or `thumbnail_unique_id`. Processes up to 100 rows per
-              pass.
+              Runs a manual repair pass for old records missing
+              `media_album_id`, captions, or `thumbnail_unique_id`. Processes up
+              to 100 rows per pass.
             </p>
             {account?.status !== "active" && (
               <p className="text-xs text-muted-foreground">
@@ -307,14 +302,24 @@ export default function SettingsForm() {
                 <div className="mt-2 space-y-2 text-muted-foreground">
                   {lastMaintenanceResult.album && (
                     <div>
-                      <span className="font-medium text-foreground">Album:</span>{" "}
-                      scanned {lastMaintenanceResult.album.scanned}, updated {lastMaintenanceResult.album.updated}, skipped {lastMaintenanceResult.album.skipped}, failed {lastMaintenanceResult.album.failed}
+                      <span className="font-medium text-foreground">
+                        Album:
+                      </span>{" "}
+                      scanned {lastMaintenanceResult.album.scanned}, updated{" "}
+                      {lastMaintenanceResult.album.updated}, skipped{" "}
+                      {lastMaintenanceResult.album.skipped}, failed{" "}
+                      {lastMaintenanceResult.album.failed}
                     </div>
                   )}
                   {lastMaintenanceResult.thumbnail && (
                     <div>
-                      <span className="font-medium text-foreground">Thumbnail:</span>{" "}
-                      scanned {lastMaintenanceResult.thumbnail.scanned}, updated {lastMaintenanceResult.thumbnail.updated}, skipped {lastMaintenanceResult.thumbnail.skipped}, failed {lastMaintenanceResult.thumbnail.failed}
+                      <span className="font-medium text-foreground">
+                        Thumbnail:
+                      </span>{" "}
+                      scanned {lastMaintenanceResult.thumbnail.scanned}, updated{" "}
+                      {lastMaintenanceResult.thumbnail.updated}, skipped{" "}
+                      {lastMaintenanceResult.thumbnail.skipped}, failed{" "}
+                      {lastMaintenanceResult.thumbnail.failed}
                     </div>
                   )}
                 </div>
@@ -332,14 +337,18 @@ export default function SettingsForm() {
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-3 rounded-md border border-border p-4">
                 <div>
-                  <p className="text-sm font-medium text-foreground">Reset PIN</p>
+                  <p className="text-sm font-medium text-foreground">
+                    Reset PIN
+                  </p>
                   <p className="text-xs text-muted-foreground">
                     Use a 4-12 digit PIN to protect the reset action.
                   </p>
                 </div>
                 {pinEnabled && (
                   <div className="space-y-2">
-                    <Label htmlFor="current-offline-reset-pin">Current PIN</Label>
+                    <Label htmlFor="current-offline-reset-pin">
+                      Current PIN
+                    </Label>
                     <Input
                       id="current-offline-reset-pin"
                       type="password"
@@ -368,7 +377,9 @@ export default function SettingsForm() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
-                    disabled={isSavingPin || !newPin || (pinEnabled && !currentPin)}
+                    disabled={
+                      isSavingPin || !newPin || (pinEnabled && !currentPin)
+                    }
                     onClick={() => void handleSavePin()}
                   >
                     {isSavingPin ? (
@@ -407,9 +418,9 @@ export default function SettingsForm() {
                     Reset offline data
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    This is destructive. Telegram accounts, chat groups, proxies,
-                    and settings stay intact, but cached offline file data is
-                    removed.
+                    This is destructive. Telegram accounts, chat groups,
+                    proxies, and settings stay intact, but cached offline file
+                    data is removed.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -419,7 +430,9 @@ export default function SettingsForm() {
                     type="password"
                     inputMode="numeric"
                     autoComplete="off"
-                    placeholder={pinEnabled ? "PIN required" : "Set a PIN first"}
+                    placeholder={
+                      pinEnabled ? "PIN required" : "Set a PIN first"
+                    }
                     value={resetPin}
                     onChange={(event) => setResetPin(event.target.value)}
                     disabled={!pinEnabled}
@@ -450,21 +463,21 @@ export default function SettingsForm() {
             <RadioGroup
               value={settings?.speedUnits || "bits"}
               onValueChange={(v) => void setSetting("speedUnits", v)}
-               className="group inline-flex h-10 items-center justify-center rounded-md bg-secondary p-1 text-muted-foreground"
-               data-state={settings?.speedUnits || "bits"}
-             >
-               <label className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 group-data-[state=bits]:bg-card group-data-[state=bits]:text-foreground">
-                 bits
-                 <RadioGroupItem
-                   id="enspeedUnits-bits"
+              className="group inline-flex h-10 items-center justify-center rounded-md bg-secondary p-1 text-muted-foreground"
+              data-state={settings?.speedUnits || "bits"}
+            >
+              <label className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 group-data-[state=bits]:bg-card group-data-[state=bits]:text-foreground">
+                bits
+                <RadioGroupItem
+                  id="enspeedUnits-bits"
                   value="bits"
                   className="sr-only"
                 />
               </label>
-               <label className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 group-data-[state=bytes]:bg-card group-data-[state=bytes]:text-foreground">
-                 bytes
-                 <RadioGroupItem
-                   id="speedUnits-bytes"
+              <label className="inline-flex cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-3 py-1.5 text-sm font-medium ring-offset-background transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 group-data-[state=bytes]:bg-card group-data-[state=bytes]:text-foreground">
+                bytes
+                <RadioGroupItem
+                  id="speedUnits-bytes"
                   value="bytes"
                   className="sr-only"
                 />
@@ -533,7 +546,9 @@ export default function SettingsForm() {
           )}
         </div>
         <div className="flex w-full flex-col space-y-4 rounded-md border border-border bg-card p-5">
-          <Label className="text-base font-semibold text-foreground">Auto download</Label>
+          <Label className="text-base font-semibold text-foreground">
+            Auto download
+          </Label>
           <div className="flex flex-col space-y-4">
             <div className="flex items-center justify-between">
               <Label htmlFor="limit">Limit Per Account</Label>
@@ -585,11 +600,10 @@ export default function SettingsForm() {
               startRequired={true}
               endRequired={true}
               includeSeconds={false}
-              timeRange={
-                settings?.autoDownloadTimeLimited
-                  ? JSON.parse(settings.autoDownloadTimeLimited)
-                  : { startTime: "00:00", endTime: "00:00" }
-              }
+              timeRange={safeJsonParse(settings?.autoDownloadTimeLimited, {
+                startTime: "00:00",
+                endTime: "00:00",
+              })}
               onTimeRangeChange={(
                 startTime: string | null,
                 endTime: string | null,
@@ -613,7 +627,9 @@ export default function SettingsForm() {
           </div>
         </div>
         <div className="flex w-full flex-col space-y-4 rounded-md border border-border bg-card p-5">
-          <Label className="text-base font-semibold text-foreground">Tags</Label>
+          <Label className="text-base font-semibold text-foreground">
+            Tags
+          </Label>
           <div className="flex flex-col space-y-4">
             <TagsInput
               maxTags={20}

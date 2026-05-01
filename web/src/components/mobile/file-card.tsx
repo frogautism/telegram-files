@@ -58,12 +58,16 @@ export function FileCard({
           : "before:w-0",
         className,
       )}
-      style={{
-        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-        // @ts-expect-error
-        "--tw-progress-width": `${downloadProgress > 0 && downloadProgress !== 100 ? downloadProgress.toFixed(0) + "%" : "0"}`,
-        ...style,
-      }}
+      style={
+        {
+          "--tw-progress-width": `${
+            downloadProgress > 0 && downloadProgress !== 100
+              ? `${downloadProgress.toFixed(0)}%`
+              : "0"
+          }`,
+          ...style,
+        } as React.CSSProperties & Record<"--tw-progress-width", string>
+      }
       onClick={onFileClick}
     >
       <CardContent className="relative z-20 w-full p-3">

@@ -61,7 +61,10 @@ const rebuildVisiblePages = (
   const pageLengths = currentPages.map((page, index) =>
     index === 0 ? freshFirstPage.files.length : page.files.length,
   );
-  const totalSlots = pageLengths.reduce((sum, pageLength) => sum + pageLength, 0);
+  const totalSlots = pageLengths.reduce(
+    (sum, pageLength) => sum + pageLength,
+    0,
+  );
   if (totalSlots === 0) {
     return [freshFirstPage];
   }
@@ -154,7 +157,7 @@ export function useFiles(
     const effectiveOrder = filters.order ?? (isGroupChat ? "desc" : undefined);
     return new URLSearchParams({
       ...(filters.search && {
-        search: window.encodeURIComponent(filters.search),
+        search: filters.search,
       }),
       ...(filters.type && { type: filters.type }),
       ...(filters.downloadStatus && { downloadStatus: filters.downloadStatus }),
@@ -165,7 +168,7 @@ export function useFiles(
         tags: filters.tags.join(","),
       }),
       ...(messageThreadId && { messageThreadId: messageThreadId.toString() }),
-      ...(link && { link: window.encodeURIComponent(link) }),
+      ...(link && { link }),
       ...(filters.dateType && { dateType: filters.dateType }),
       ...(filters.dateRange && { dateRange: filters.dateRange.join(",") }),
       ...(filters.sizeRange && { sizeRange: filters.sizeRange.join(",") }),
@@ -188,9 +191,16 @@ export function useFiles(
         return null;
       }
 
-      params.set("fromMessageId", previousPageData.nextFromMessageId.toString());
-      if ((filters.offline || isGroupChat) && previousPageData.files.length > 0) {
-        const lastFile = previousPageData.files[previousPageData.files.length - 1];
+      params.set(
+        "fromMessageId",
+        previousPageData.nextFromMessageId.toString(),
+      );
+      if (
+        (filters.offline || isGroupChat) &&
+        previousPageData.files.length > 0
+      ) {
+        const lastFile =
+          previousPageData.files[previousPageData.files.length - 1];
         if (effectiveSort === "size") {
           params.set("fromSortField", lastFile!.size.toString());
         } else if (effectiveSort === "completion_date") {
@@ -305,7 +315,8 @@ export function useFiles(
           data.downloadedSize ?? prev[exactStatusKey]?.downloadedSize,
         transferStatus:
           data.transferStatus ?? prev[exactStatusKey]?.transferStatus,
-        thumbnailFile: data.thumbnailFile ?? prev[exactStatusKey]?.thumbnailFile,
+        thumbnailFile:
+          data.thumbnailFile ?? prev[exactStatusKey]?.thumbnailFile,
       },
       ...(aliasStatusKey && aliasStatusKey !== exactStatusKey
         ? {
@@ -318,7 +329,8 @@ export function useFiles(
                 data.completionDate ?? prev[aliasStatusKey]?.completionDate,
               downloadedSize:
                 data.downloadedSize ?? prev[aliasStatusKey]?.downloadedSize,
-              transferStatus: prev[aliasStatusKey]?.transferStatus,
+              transferStatus:
+                data.transferStatus ?? prev[aliasStatusKey]?.transferStatus,
               thumbnailFile:
                 data.thumbnailFile ?? prev[aliasStatusKey]?.thumbnailFile,
             },
@@ -377,22 +389,16 @@ export function useFiles(
           ...file,
           id: latestFilesStatus[statusKey]?.fileId ?? file.id,
           downloadStatus:
-            latestFilesStatus[statusKey]?.downloadStatus ??
-            file.downloadStatus,
-          localPath:
-            latestFilesStatus[statusKey]?.localPath ?? file.localPath,
+            latestFilesStatus[statusKey]?.downloadStatus ?? file.downloadStatus,
+          localPath: latestFilesStatus[statusKey]?.localPath ?? file.localPath,
           completionDate:
-            latestFilesStatus[statusKey]?.completionDate ??
-            file.completionDate,
+            latestFilesStatus[statusKey]?.completionDate ?? file.completionDate,
           downloadedSize:
-            latestFilesStatus[statusKey]?.downloadedSize ??
-            file.downloadedSize,
+            latestFilesStatus[statusKey]?.downloadedSize ?? file.downloadedSize,
           transferStatus:
-            latestFilesStatus[statusKey]?.transferStatus ??
-            file.transferStatus,
+            latestFilesStatus[statusKey]?.transferStatus ?? file.transferStatus,
           thumbnailFile:
-            latestFilesStatus[statusKey]?.thumbnailFile ??
-            file.thumbnailFile,
+            latestFilesStatus[statusKey]?.thumbnailFile ?? file.thumbnailFile,
         });
       });
     });
@@ -416,52 +422,49 @@ export function useFiles(
     return hasMore;
   }, [pages]);
 
-  const handleLoadMore = async () => {
+  const handleLoadMore = useCallback(async () => {
     if (isLoading || isValidating || !hasMore || error) return;
-    await setSize(size + 1);
-  };
+    await setSize((currentSize) => currentSize + 1);
+  }, [error, hasMore, isLoading, isValidating, setSize]);
 
-  const handleFilterChange = async (newFilters: FileFilter) => {
-    if (
-      Object.keys(newFilters).every(
-        (key) =>
-          newFilters[key as keyof FileFilter] ===
-          filters[key as keyof FileFilter],
-      )
-    ) {
-      return;
-    }
-    setFilters(newFilters);
-    await setSize(1);
-  };
+  const handleFilterChange = useCallback(
+    async (newFilters: FileFilter) => {
+      if (JSON.stringify(newFilters) === JSON.stringify(filters)) {
+        return;
+      }
+      setFilters(newFilters);
+      await setSize(1);
+    },
+    [filters, setFilters, setSize],
+  );
 
-  const updateField = async (
-    uniqueId: string,
-    patch: Partial<TelegramFile>,
-  ) => {
-    await mutate((pages) => {
-      if (!pages) return [];
+  const updateField = useCallback(
+    async (uniqueId: string, patch: Partial<TelegramFile>) => {
+      await mutate((pages) => {
+        if (!pages) return [];
 
-      return pages.map((page) => {
-        const newFiles = page.files.map((file) =>
-          file.uniqueId === uniqueId ? { ...file, ...patch } : file,
-        );
-        return {
-          ...page,
-          files: newFiles,
-        };
-      });
-    }, false);
-  };
+        return pages.map((page) => {
+          const newFiles = page.files.map((file) =>
+            file.uniqueId === uniqueId ? { ...file, ...patch } : file,
+          );
+          return {
+            ...page,
+            files: newFiles,
+          };
+        });
+      }, false);
+    },
+    [mutate],
+  );
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     setLatestFileStatus({});
     if (!pages || pages.length === 0) {
       await mutate();
       return;
     }
     await refreshVisiblePages();
-  };
+  }, [mutate, pages, refreshVisiblePages]);
 
   return {
     size,

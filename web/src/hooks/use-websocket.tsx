@@ -42,7 +42,9 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({
 }) => {
   const searchParams = useSearchParams();
   const telegramId = searchParams.get("id")?.trim();
-  const wsUrl = telegramId ? `${WS_URL}?telegramId=${telegramId}` : WS_URL;
+  const wsUrl = telegramId
+    ? `${WS_URL}?telegramId=${encodeURIComponent(telegramId)}`
+    : WS_URL;
   const [isReady, setIsReady] = useState(false);
   const [accountDownloadSpeed, setAccountDownloadSpeed] = useState({
     speed: 0,
@@ -57,7 +59,7 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({
 
   const { sendMessage, lastJsonMessage, readyState } =
     useWebSocket<WebSocketMessage>(wsUrl, {
-      shouldReconnect: (closeEvent) => true,
+      shouldReconnect: () => true,
       reconnectAttempts: 3,
       reconnectInterval: 3000,
     });
@@ -76,9 +78,6 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({
 
   useEffect(() => {
     if (lastJsonMessage !== null) {
-      // console.log(
-      //   `🐄: ${JSON.stringify(lastJsonMessage, null, 2)}`,
-      // )
       try {
         const payload: WebSocketMessage = lastJsonMessage;
         const timestamp = payload.timestamp;

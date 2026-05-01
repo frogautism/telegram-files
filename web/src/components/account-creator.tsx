@@ -115,7 +115,7 @@ export default function AccountCreator({
           setTimeout(() => {
             void mutate("/telegrams");
           }, 500);
-          console.log("Unknown telegram constructor:", state.constructor);
+          console.warn("Unknown telegram constructor:", state.constructor);
       }
     },
     [mutate, onLoginSuccess, toast],

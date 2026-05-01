@@ -24,42 +24,55 @@ export function getWsUrl(): string {
   }${url}`;
 }
 
-/* eslint-disable */
 export async function request<T = any>(
   api: string,
   requestInit?: RequestInit,
 ): Promise<T> {
-  const defaultHeaders = {
-    "Content-Type": "application/json",
-  };
+  const headers = new Headers(requestInit?.headers);
+  const body = requestInit?.body;
+  const shouldSetJsonContentType =
+    body !== undefined &&
+    !(body instanceof FormData) &&
+    !(body instanceof URLSearchParams) &&
+    !(body instanceof Blob);
+  if (!headers.has("Content-Type") && shouldSetJsonContentType) {
+    headers.set("Content-Type", "application/json");
+  }
 
   const response = await fetch(`${getApiUrl()}${api}`, {
-    credentials: "include",
-    headers: {
-      ...defaultHeaders,
-      ...requestInit?.headers,
-    },
     ...requestInit,
+    credentials: requestInit?.credentials ?? "include",
+    headers,
   });
   const responseText = await response.text();
+  const method = requestInit?.method ?? "GET";
+
   if (!responseText) {
+    if (!response.ok) {
+      throw new Error(
+        `Request failed with status ${response.status} (${method} ${api})`,
+      );
+    }
     return undefined as T;
   }
-  let data;
+
+  let data: unknown;
   try {
-    data = JSON.parse(responseText);
-  } catch (e) {
+    data = JSON.parse(responseText) as unknown;
+  } catch {
+    if (!response.ok) {
+      throw new Error(`${responseText} (${method} ${api})`);
+    }
     throw new RequestParsedError(responseText);
   }
   if (!response.ok) {
+    const responseData = data as Record<string, unknown>;
     const errorMessage =
-      data?.error ??
-      data?.detail ??
-      data?.message ??
+      responseData.error ??
+      responseData.detail ??
+      responseData.message ??
       `Request failed with status ${response.status}`;
-    throw new Error(
-      `${errorMessage} (${requestInit?.method ?? "GET"} ${api})`,
-    );
+    throw new Error(`${String(errorMessage)} (${method} ${api})`);
   }
 
   return data as T;
@@ -75,9 +88,15 @@ export class RequestParsedError extends Error {
 }
 
 export function localStorageProvider() {
-  const map = new Map<string, any>(
-    JSON.parse(localStorage.getItem("telegram-files") ?? "[]"),
-  );
+  let entries: Iterable<readonly [string, unknown]> = [];
+  try {
+    entries = JSON.parse(
+      localStorage.getItem("telegram-files") ?? "[]",
+    ) as Iterable<readonly [string, unknown]>;
+  } catch {
+    entries = [];
+  }
+  const map = new Map<string, unknown>(entries);
 
   window.addEventListener("beforeunload", () => {
     const appCache = JSON.stringify(Array.from(map.entries()));

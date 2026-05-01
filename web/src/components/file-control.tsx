@@ -214,8 +214,12 @@ export default function FileControl({
           (chat?.kind === "group" || chat?.type === "channel") && (
             <ActionButton isMobile={isMobile} {...replyBtnProps} />
           )}
-        {statusMapping[file.downloadStatus].map((btnProps, index) => (
-          <ActionButton key={index} isMobile={isMobile} {...btnProps} />
+        {statusMapping[file.downloadStatus].map((btnProps) => (
+          <ActionButton
+            key={btnProps.tooltipText}
+            isMobile={isMobile}
+            {...btnProps}
+          />
         ))}
       </div>
     </div>

@@ -48,17 +48,19 @@ export const SettingsProvider: React.FC<SettingsProviderProps> = ({
     });
     // 更新缓存
     if (updates) {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-expect-error
-      await mutate((current) => ({ ...current, ...updates }), false);
+      await mutate(
+        (current) => ({ ...(current ?? ({} as Settings)), ...updates }),
+        false,
+      );
     }
     toast({ variant: "success", description: "Settings updated" });
   };
 
   const setSetting = async (key: SettingKey, value: string) => {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-expect-error
-    await mutate((current) => ({ ...current, [key]: value }), false);
+    await mutate(
+      (current) => ({ ...(current ?? ({} as Settings)), [key]: value }),
+      false,
+    );
   };
 
   return (

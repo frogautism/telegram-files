@@ -40,46 +40,76 @@ export function useFileSpeed(file: TelegramFile) {
   }, [file.downloadStatus, file.downloadedSize, file.size, debounceProgress]);
 
   useEffect(() => {
+    const fileProgress =
+      file.size > 0
+        ? Math.min((file.downloadedSize / file.size) * 100, 100)
+        : 0;
+    setDownloadProgress((prev) =>
+      file.downloadStatus === "downloading"
+        ? Math.max(prev, fileProgress)
+        : fileProgress,
+    );
+  }, [file.downloadStatus, file.downloadedSize, file.size]);
+
+  useEffect(() => {
+    setDownloadSpeed({
+      speed: 0,
+      lastDownloadedSize: 0,
+      lastTimestamp: 0,
+    });
+  }, [file.downloadStatus, file.uniqueId, fileId]);
+
+  useEffect(() => {
     if (
-      lastJsonMessage !== null &&
-      lastJsonMessage.type === WebSocketMessageType.FILE_UPDATE
+      lastJsonMessage === null ||
+      lastJsonMessage.type !== WebSocketMessageType.FILE_UPDATE
     ) {
-      const { file } = lastJsonMessage.data as { file: TDFile };
-      if (file.id !== fileId || !file.local) {
-        return;
-      }
+      return;
+    }
 
-      const timestamp = lastJsonMessage.timestamp;
-      const size = file.size === 0 ? file.expectedSize : file.size;
-      const downloadedSize = file.local.downloadedSize;
+    const { file } = lastJsonMessage.data as { file: TDFile };
+    if (file.id !== fileId || !file.local) {
+      return;
+    }
 
+    const timestamp = lastJsonMessage.timestamp;
+    const size = file.size || file.expectedSize;
+    const downloadedSize = file.local.downloadedSize;
+
+    if (size > 0) {
       setDownloadProgress((prev) => {
         return Math.max(Math.min((downloadedSize / size) * 100, 100), prev);
       });
-
-      setDownloadSpeed((prev) => {
-        const state = {
-          lastTimestamp: timestamp,
-          lastDownloadedSize: downloadedSize,
-        };
-        if (prev.lastTimestamp === 0) {
-          return { ...state, speed: 0 };
-        }
-        const timeDiff = (timestamp - prev.lastTimestamp) / 1000;
-        if (timeDiff <= 0 || downloadedSize <= prev.lastDownloadedSize) {
-          return prev;
-        }
-
-        const speed = (downloadedSize - prev.lastDownloadedSize) / timeDiff;
-        return {
-          speed,
-          lastTimestamp: timestamp,
-          lastDownloadedSize: downloadedSize,
-        };
-      });
     }
 
-    const interval = setInterval(() => {
+    setDownloadSpeed((prev) => {
+      const state = {
+        lastTimestamp: timestamp,
+        lastDownloadedSize: downloadedSize,
+      };
+      if (prev.lastTimestamp === 0) {
+        return { ...state, speed: 0 };
+      }
+      const timeDiff = (timestamp - prev.lastTimestamp) / 1000;
+      if (timeDiff <= 0 || downloadedSize <= prev.lastDownloadedSize) {
+        return { ...prev, ...state };
+      }
+
+      const speed = (downloadedSize - prev.lastDownloadedSize) / timeDiff;
+      return {
+        speed,
+        lastTimestamp: timestamp,
+        lastDownloadedSize: downloadedSize,
+      };
+    });
+  }, [fileId, lastJsonMessage]);
+
+  useEffect(() => {
+    if (downloadSpeed.speed <= 0) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
       setDownloadSpeed((prev) => ({
         ...prev,
         speed: 0,
@@ -87,9 +117,9 @@ export function useFileSpeed(file: TelegramFile) {
     }, 2000);
 
     return () => {
-      clearInterval(interval);
+      clearTimeout(timeout);
     };
-  }, [fileId, lastJsonMessage]);
+  }, [downloadSpeed.speed]);
 
   useEffect(() => {
     // Mock data

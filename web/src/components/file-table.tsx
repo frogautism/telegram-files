@@ -17,7 +17,7 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { useFiles } from "@/hooks/use-files";
-import FileNotFount from "@/components/file-not-found";
+import FileNotFound from "@/components/file-not-found";
 import type { TelegramFile } from "@/lib/types";
 import FileViewer from "@/components/file-viewer";
 import FileFilters from "./file-filters";
@@ -83,7 +83,11 @@ export function FileTable({
   useEffect(() => {
     if (typeof window === "undefined") return;
     const stored = window.localStorage.getItem(DENSITY_KEY);
-    if (stored === "compact" || stored === "comfortable" || stored === "detail") {
+    if (
+      stored === "compact" ||
+      stored === "comfortable" ||
+      stored === "detail"
+    ) {
       setDensity(stored);
     }
   }, []);
@@ -103,7 +107,7 @@ export function FileTable({
       return;
     }
     const file = files[index]!;
-    if (currentViewFile.next === undefined && file.next !== undefined) {
+    if (currentViewFile !== file) {
       setCurrentViewFile(file);
     }
   }, [currentViewFile, files]);
@@ -293,7 +297,7 @@ export function FileTable({
           {size === 1 && isLoading ? (
             <MediaGridSkeleton count={18} />
           ) : files.length === 0 ? (
-            <FileNotFount />
+            <FileNotFound />
           ) : (
             <>
               <div className={gridClass}>
@@ -340,7 +344,11 @@ function DensityToggle({
   density: Density;
   onChange: (d: Density) => void;
 }) {
-  const options: Array<{ value: Density; icon: typeof Grid3x3; label: string }> = [
+  const options: Array<{
+    value: Density;
+    icon: typeof Grid3x3;
+    label: string;
+  }> = [
     { value: "compact", icon: Grid3x3, label: "Compact" },
     { value: "comfortable", icon: LayoutGrid, label: "Comfortable" },
     { value: "detail", icon: Rows3, label: "Detail" },
@@ -437,10 +445,11 @@ function MediaTile({
   const { downloadProgress, downloadSpeed } = useFileSpeed(file);
   const aspect = getPreviewAspect(file);
   const isCompact = density === "compact";
-  const displayCaption =
-    (groupFiles?.find((f) => f.caption.trim() !== "")?.caption ??
-      file.caption ??
-      "").trim();
+  const displayCaption = (
+    groupFiles?.find((f) => f.caption.trim() !== "")?.caption ??
+    file.caption ??
+    ""
+  ).trim();
   const showCaptionBelow = !isCompact && displayCaption !== "";
   const captionClampClass =
     density === "detail" ? "line-clamp-3" : "line-clamp-2";
@@ -465,7 +474,7 @@ function MediaTile({
             "absolute left-2 top-2 z-10 transition-opacity",
             selected
               ? "opacity-100"
-              : "opacity-0 group-hover:opacity-100 focus-within:opacity-100",
+              : "opacity-0 focus-within:opacity-100 group-hover:opacity-100",
           )}
           onClick={(e) => e.stopPropagation()}
         >

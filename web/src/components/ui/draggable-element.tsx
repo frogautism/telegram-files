@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   DndContext,
   type DragEndEvent,
@@ -71,11 +71,17 @@ const DraggableContent = ({
   );
 };
 
+const getDefaultPosition = () => ({
+  x: typeof window === "undefined" ? 0 : Math.max(window.innerWidth - 60, 0),
+  y: typeof window === "undefined" ? 0 : Math.max(window.innerHeight - 60, 0),
+});
+
 const DraggableElement = (props: DraggableElementProps) => {
-  const [position, setPosition] = useState({
-    x: window.innerWidth - 60,
-    y: window.innerHeight - 60,
-  });
+  const [position, setPosition] = useState(getDefaultPosition);
+
+  useEffect(() => {
+    setPosition(getDefaultPosition());
+  }, []);
 
   const mouseSensor = useSensor(MouseSensor, {
     activationConstraint: {
@@ -96,14 +102,10 @@ const DraggableElement = (props: DraggableElementProps) => {
     const { delta } = event;
 
     setPosition((prev) => {
-      const newX = Math.max(
-        0,
-        Math.min(prev.x + delta.x, window.innerWidth - 40),
-      );
-      const newY = Math.max(
-        0,
-        Math.min(prev.y + delta.y, window.innerHeight - 40),
-      );
+      const maxX = Math.max(window.innerWidth - 40, 0);
+      const maxY = Math.max(window.innerHeight - 40, 0);
+      const newX = Math.max(0, Math.min(prev.x + delta.x, maxX));
+      const newY = Math.max(0, Math.min(prev.y + delta.y, maxY));
       return { x: newX, y: newY };
     });
   };

@@ -53,9 +53,8 @@ export default function ParseLinkButton({ accountId }: ParseLinkButtonProps) {
         variant: "success",
       });
       // Redirect to the account page with the parsed link
-      router.push(
-        `/accounts?id=${accountId}&link=${window.encodeURIComponent(text)}`,
-      );
+      const params = new URLSearchParams({ id: accountId, link: text });
+      router.push(`/accounts?${params.toString()}`);
     } else {
       toast({
         title: "No link found in clipboard",

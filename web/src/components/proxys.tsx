@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Copy, Plus, SquarePen, Trash } from "lucide-react";
 import { type Proxy } from "@/lib/types";
-import { cn, parseProxyString } from "@/lib/utils";
+import { cn, parseProxyString, safeJsonParse } from "@/lib/utils";
 import useSWRMutation from "swr/mutation";
 import { request } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
@@ -87,15 +87,9 @@ export default function Proxys({
     );
 
   // Parse proxy settings
-  const proxys = (
-    (settings?.proxys
-      ? JSON.parse(settings.proxys)
-      : {
-          items: [],
-        }) as {
-      items: Proxy[];
-    }
-  ).items;
+  const proxys = safeJsonParse<{ items: Proxy[] }>(settings?.proxys, {
+    items: [],
+  }).items;
 
   // Open dialog for adding or editing proxy
   const handleOpenDialog = (proxy: Proxy | null = null): void => {
@@ -173,16 +167,21 @@ export default function Proxys({
       </div>
       {proxys.length === 0 && (
         <div className="flex h-32 items-center justify-center rounded-md bg-muted">
-          <p className="text-center text-muted-foreground">No proxys added yet</p>
+          <p className="text-center text-muted-foreground">
+            No proxys added yet
+          </p>
         </div>
       )}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3 2xl:grid-cols-4">
         {proxys.map((proxy) => (
           <Card
             key={proxy.name}
-            className={cn("relative overflow-hidden border-border transition-colors hover:bg-muted", {
-              "cursor-pointer": enableSelect,
-            })}
+            className={cn(
+              "relative overflow-hidden border-border transition-colors hover:bg-muted",
+              {
+                "cursor-pointer": enableSelect,
+              },
+            )}
             onClick={() => {
               if (innerProxyName === proxy.name) {
                 setInnerProxyName("");
@@ -358,40 +357,40 @@ export default function Proxys({
               <Label className="mb-2 block">Authentication (optional)</Label>
               {formState.type === "mtproto" ? (
                 <div>
-                <label className="block text-xs font-medium text-gray-500">
-                  Secret
-                </label>
-                <Input
-                  name="secret"
-                  value={formState.secret}
-                  onChange={handleInputChange}
-                  placeholder="Enter secret"
-                />
+                  <label className="block text-xs font-medium text-gray-500">
+                    Secret
+                  </label>
+                  <Input
+                    name="secret"
+                    value={formState.secret}
+                    onChange={handleInputChange}
+                    placeholder="Enter secret"
+                  />
                 </div>
               ) : (
                 <>
                   <div>
-                  <label className="block text-xs font-medium text-gray-500">
-                    Username
-                  </label>
-                  <Input
-                    name="username"
-                    value={formState.username}
-                    onChange={handleInputChange}
-                    placeholder="Enter username"
-                  />
+                    <label className="block text-xs font-medium text-gray-500">
+                      Username
+                    </label>
+                    <Input
+                      name="username"
+                      value={formState.username}
+                      onChange={handleInputChange}
+                      placeholder="Enter username"
+                    />
                   </div>
                   <div>
-                  <label className="block text-xs font-medium text-gray-500">
-                    Password
-                  </label>
-                  <Input
-                    name="password"
-                    type="password"
-                    value={formState.password}
-                    onChange={handleInputChange}
-                    placeholder="Enter password"
-                  />
+                    <label className="block text-xs font-medium text-gray-500">
+                      Password
+                    </label>
+                    <Input
+                      name="password"
+                      type="password"
+                      value={formState.password}
+                      onChange={handleInputChange}
+                      placeholder="Enter password"
+                    />
                   </div>
                 </>
               )}

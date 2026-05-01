@@ -10,7 +10,7 @@ import { isEqual } from "lodash";
 import FileFilters from "@/components/file-filters";
 import DraggableElement from "@/components/ui/draggable-element";
 import { useLocalStorage } from "@/hooks/use-local-storage";
-import FileNotFount from "@/components/file-not-found";
+import FileNotFound from "@/components/file-not-found";
 import { MobileFileTagsDrawer } from "@/components/file-tags";
 import { getFileGroupKey } from "@/lib/file-groups";
 import { Button } from "@/components/ui/button";
@@ -187,7 +187,7 @@ export default function FileList({ accountId, chatId, link }: FileListProps) {
             />
           </div>
         )}
-        {!isLoading && files.length === 0 && <FileNotFount />}
+        {!isLoading && files.length === 0 && <FileNotFound />}
         {files.length !== 0 &&
           rowVirtual.getVirtualItems().map((virtualRow) => {
             const isLoaderRow = virtualRow.index > files.length - 1;

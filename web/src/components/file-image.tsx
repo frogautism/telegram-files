@@ -28,12 +28,12 @@ const ImageErrorFallback = ({
       className,
     )}
   >
-      <ImageOff
-        className={cn(
-          "text-muted-foreground",
-          size === "s" && "h-4 w-4",
-          size === "m" && "h-8 w-8",
-          size === "l" && "h-16 w-16",
+    <ImageOff
+      className={cn(
+        "text-muted-foreground",
+        size === "s" && "h-4 w-4",
+        size === "m" && "h-8 w-8",
+        size === "l" && "h-16 w-16",
       )}
     />
   </div>
@@ -78,20 +78,28 @@ export default function FilePreview({
   isGalleryLayout?: boolean;
   className?: string;
 }) {
-  const [viewportHeight, setViewportHeight] = useState(
-    isFullPreview ? window.innerHeight : 288,
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    isFullPreview && typeof window !== "undefined" ? window.innerHeight : 288,
   );
   const [error, setError] = useState(false);
 
   useEffect(() => {
-    if (isFullPreview) {
-      const handleResize = () => {
-        setViewportHeight(window.innerHeight);
-      };
+    setError(false);
+  }, [file.thumbnail, file.thumbnailFile?.uniqueId, file.uniqueId]);
 
-      window.addEventListener("resize", handleResize);
-      return () => window.removeEventListener("resize", handleResize);
+  useEffect(() => {
+    if (!isFullPreview) {
+      setViewportHeight(288);
+      return;
     }
+
+    const handleResize = () => {
+      setViewportHeight(window.innerHeight);
+    };
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, [isFullPreview]);
 
   const handleError = () => {

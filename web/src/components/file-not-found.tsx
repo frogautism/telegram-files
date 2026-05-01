@@ -1,6 +1,6 @@
 import { FolderSearch, Sparkles } from "lucide-react";
 
-export default function FileNotFount({
+export default function FileNotFound({
   title = "Nothing here yet",
   description = "Adjust your filters, try a different chat, or switch between live Telegram and your offline archive.",
 }: {

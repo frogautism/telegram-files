@@ -11,6 +11,7 @@ export function useTelegramMethod() {
       {
         resolve: (value: any) => void;
         reject: (reason?: any) => void;
+        timeoutId: ReturnType<typeof setTimeout>;
       }
     >
   >(new Map());
@@ -43,6 +44,7 @@ export function useTelegramMethod() {
 
     const pendingRequest = pendingRequestsRef.current.get(code);
     if (pendingRequest) {
+      clearTimeout(pendingRequest.timeoutId);
       pendingRequest.resolve(data);
       pendingRequestsRef.current.delete(code);
       setPendingCount(pendingRequestsRef.current.size);
@@ -50,20 +52,15 @@ export function useTelegramMethod() {
   }, [lastJsonMessage]);
 
   useEffect(() => {
-    if (!lastJsonMessage?.code) return;
-
-    const code = lastJsonMessage.code;
-    const data = lastJsonMessage.data;
-
-    lastResultRef.current = { code, result: data };
-
-    const pendingRequest = pendingRequestsRef.current.get(code);
-    if (pendingRequest) {
-      pendingRequest.resolve(data);
-      pendingRequestsRef.current.delete(code);
-      setPendingCount(pendingRequestsRef.current.size); // 更新 state
-    }
-  }, [lastJsonMessage]);
+    const pendingRequests = pendingRequestsRef.current;
+    return () => {
+      pendingRequests.forEach((request, code) => {
+        clearTimeout(request.timeoutId);
+        request.reject(new Error(`Request cancelled for code: ${code}`));
+      });
+      pendingRequests.clear();
+    };
+  }, []);
 
   const { trigger, isMutating } = useSWRMutation<
     TelegramApiResult,
@@ -74,43 +71,32 @@ export function useTelegramMethod() {
 
   const executeMethod = useCallback(
     async (arg: TelegramApiArg): Promise<any> => {
-      try {
-        const result = await trigger(arg);
-        const { code } = result;
+      const result = await trigger(arg);
+      const { code } = result;
 
-        if (lastResultRef.current.code === code) {
-          return lastResultRef.current.result;
-        }
-
-        return new Promise((resolve, reject) => {
-          const timeoutId = setTimeout(() => {
-            pendingRequestsRef.current.delete(code);
-            setPendingCount(pendingRequestsRef.current.size); // 更新 state
-            reject(new Error(`Request timeout for code: ${code}`));
-          }, 30000);
-
-          pendingRequestsRef.current.set(code, {
-            resolve: (value) => {
-              clearTimeout(timeoutId);
-              pendingRequestsRef.current.delete(code);
-              setPendingCount(pendingRequestsRef.current.size); // 更新 state
-              resolve(value);
-            },
-            reject: (reason) => {
-              clearTimeout(timeoutId);
-              pendingRequestsRef.current.delete(code);
-              setPendingCount(pendingRequestsRef.current.size); // 更新 state
-              reject(
-                reason instanceof Error ? reason : new Error(String(reason)),
-              );
-            },
-          });
-
-          setPendingCount(pendingRequestsRef.current.size); // 更新 state
-        });
-      } catch (error) {
-        throw error;
+      if (lastResultRef.current.code === code) {
+        return lastResultRef.current.result;
       }
+
+      return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          pendingRequestsRef.current.delete(code);
+          setPendingCount(pendingRequestsRef.current.size);
+          reject(new Error(`Request timeout for code: ${code}`));
+        }, 30000);
+
+        pendingRequestsRef.current.set(code, {
+          timeoutId,
+          resolve,
+          reject: (reason) => {
+            reject(
+              reason instanceof Error ? reason : new Error(String(reason)),
+            );
+          },
+        });
+
+        setPendingCount(pendingRequestsRef.current.size);
+      });
     },
     [trigger],
   );
