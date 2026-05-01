@@ -105,6 +105,23 @@ def init_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_file_record_unique
             ON file_record (telegram_id, unique_id);
 
+        CREATE INDEX IF NOT EXISTS idx_file_record_unique_id
+            ON file_record (unique_id);
+
+        CREATE INDEX IF NOT EXISTS idx_file_record_download_status
+            ON file_record (download_status, type);
+
+        CREATE INDEX IF NOT EXISTS idx_file_record_transfer_candidates
+            ON file_record (
+                telegram_id,
+                chat_id,
+                download_status,
+                transfer_status,
+                completion_date DESC,
+                message_id DESC
+            )
+            WHERE type != 'thumbnail';
+
         CREATE INDEX IF NOT EXISTS idx_chat_group_record_telegram
             ON chat_group_record (telegram_id, created_at DESC);
         """
@@ -143,7 +160,22 @@ def _to_bool(value: Any) -> bool:
         return value != 0
     if value is None:
         return False
-    return str(value).lower() in {"1", "true", "yes", "on"}
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _bool_or_none(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return None
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -340,7 +372,7 @@ def list_files(
         where_clauses.append("transfer_status = ?")
         params.append(transfer_status)
 
-    already_downloaded = _to_bool(filters.get("alreadyDownloaded"))
+    already_downloaded = _bool_or_none(filters.get("alreadyDownloaded"))
     if already_downloaded is not None:
         condition = (
             "download_status = 'completed' AND TRIM(COALESCE(local_path, '')) != ''"
@@ -452,12 +484,14 @@ def list_files(
     if has_more:
         rows = rows[:limit]
 
-    thumbnail_ids = [
-        str(row["thumbnail_unique_id"])
-        for row in rows
-        if row["thumbnail_unique_id"] is not None
-        and str(row["thumbnail_unique_id"]).strip()
-    ]
+    thumbnail_ids = sorted(
+        {
+            str(row["thumbnail_unique_id"]).strip()
+            for row in rows
+            if row["thumbnail_unique_id"] is not None
+            and str(row["thumbnail_unique_id"]).strip()
+        }
+    )
     thumbnail_map: dict[str, sqlite3.Row] = {}
     if thumbnail_ids:
         placeholders = ", ".join(["?"] * len(thumbnail_ids))

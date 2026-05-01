@@ -246,10 +246,14 @@ async def _emit_ws_payload(
         return
 
     with STATE_LOCK:
-        for dead in dead_connections:
-            for session_connections in WS_CONNECTIONS.values():
-                if dead in session_connections:
-                    session_connections.discard(dead)
+        empty_sessions: list[str] = []
+        for session_id_key, session_connections in WS_CONNECTIONS.items():
+            for dead in dead_connections:
+                session_connections.discard(dead)
+            if not session_connections:
+                empty_sessions.append(session_id_key)
+        for session_id_key in empty_sessions:
+            WS_CONNECTIONS.pop(session_id_key, None)
 
 
 def _tdlib_chat_update_payload(

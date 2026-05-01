@@ -660,6 +660,8 @@ def update_transfer_status(
     if row is None:
         return None
 
+    resolved_unique = str(row["unique_id"] or unique_id)
+    resolved_file_id = _int_or_default(row["id"], 0)
     next_local_path = str(row["local_path"] or "") if local_path is None else local_path
     db.execute(
         """
@@ -672,15 +674,15 @@ def update_transfer_status(
             transfer_status,
             next_local_path,
             telegram_id,
-            _int_or_default(row["id"], 0),
-            unique_id,
+            resolved_file_id,
+            resolved_unique,
         ),
     )
     db.commit()
 
     return {
-        "fileId": _int_or_default(row["id"], 0),
-        "uniqueId": unique_id,
+        "fileId": resolved_file_id,
+        "uniqueId": resolved_unique,
         "transferStatus": transfer_status,
         "localPath": next_local_path,
     }

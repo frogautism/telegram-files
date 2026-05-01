@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from datetime import datetime
 from typing import Any
 
 from .file_record_ops import (
@@ -19,6 +20,15 @@ def _int_or_default(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _size_to_bytes(size: int, unit: str) -> int:
+    factors = {
+        "KB": 1024,
+        "MB": 1024 * 1024,
+        "GB": 1024 * 1024 * 1024,
+    }
+    return size * factors.get(unit.upper(), 1)
 
 
 def default_chat_auto() -> dict[str, Any]:
@@ -469,6 +479,50 @@ def _matches_td_file_filters(
     ):
         return False
 
+    date_type = str(filters.get("dateType") or "").strip()
+    date_range = str(filters.get("dateRange") or "").strip()
+    if date_type and date_range:
+        dates = [part.strip() for part in date_range.split(",")]
+        if len(dates) == 2 and dates[0] and dates[1]:
+            try:
+                start = datetime.fromisoformat(dates[0])
+                end = datetime.fromisoformat(dates[1])
+                start_ms = int(
+                    start.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+                    * 1000
+                )
+                end_ms = int(
+                    end.replace(
+                        hour=23, minute=59, second=59, microsecond=999000
+                    ).timestamp()
+                    * 1000
+                )
+                payload_time = _int_or_default(
+                    file_payload.get("date" if date_type == "sent" else "completionDate"),
+                    0,
+                )
+                if date_type == "sent":
+                    payload_time *= 1000
+                if payload_time < start_ms or payload_time > end_ms:
+                    return False
+            except ValueError:
+                pass
+
+    size_range = str(filters.get("sizeRange") or "").strip()
+    size_unit = str(filters.get("sizeUnit") or "").strip()
+    if size_range and size_unit:
+        sizes = [part.strip() for part in size_range.split(",")]
+        if len(sizes) == 2:
+            min_size = _int_or_default(sizes[0], -1)
+            max_size = _int_or_default(sizes[1], -1)
+            if min_size >= 0 and max_size >= 0:
+                payload_size = _int_or_default(file_payload.get("size"), 0)
+                if (
+                    payload_size < _size_to_bytes(min_size, size_unit)
+                    or payload_size > _size_to_bytes(max_size, size_unit)
+                ):
+                    return False
+
     if str(filters.get("tags") or "").strip():
         return False
 
@@ -588,6 +642,7 @@ def load_tdlib_chat_files(
     seen_message_ids: set[int] = set()
     next_cursor = from_message_id
     has_more = False
+    limit_cursor = 0
 
     for _ in range(max_batches):
         history = td_manager.request(
@@ -647,12 +702,13 @@ def load_tdlib_chat_files(
                 continue
 
             files.append(file_payload)
+            limit_cursor = _int_or_default(file_payload.get("messageId"), 0)
             if len(files) >= limit:
                 break
 
         if len(files) >= limit:
             has_more = True
-            next_cursor = batch_last_message_id
+            next_cursor = limit_cursor if limit_cursor > 0 else batch_last_message_id
             break
 
         if len(history_messages) < request_limit:
