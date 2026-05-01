@@ -82,9 +82,11 @@ export default function FilePreview({
     isFullPreview && typeof window !== "undefined" ? window.innerHeight : 288,
   );
   const [error, setError] = useState(false);
+  const [fallbackToMini, setFallbackToMini] = useState(false);
 
   useEffect(() => {
     setError(false);
+    setFallbackToMini(false);
   }, [file.thumbnail, file.thumbnailFile?.uniqueId, file.uniqueId]);
 
   useEffect(() => {
@@ -103,6 +105,10 @@ export default function FilePreview({
   }, [isFullPreview]);
 
   const handleError = () => {
+    if (!fallbackToMini && file.thumbnail) {
+      setFallbackToMini(true);
+      return;
+    }
     setError(true);
   };
 
@@ -117,7 +123,7 @@ export default function FilePreview({
 
   // 确定图像源
   const getImageSource = (uniqueId: string) => {
-    if (uniqueId) {
+    if (!fallbackToMini && uniqueId) {
       return `${getApiUrl()}/${file.telegramId}/file/${uniqueId}`;
     }
     return `data:image/jpeg;base64,${file.thumbnail}`;
