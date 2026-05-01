@@ -1,10 +1,12 @@
 import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from app.db import init_schema
+from app.db import init_schema, list_files, mark_file_preview_downloaded
 from app.file_record_ops import upsert_tdlib_file_record
-from app.tdlib_downloads import start_tdlib_download_for_message
+from app.tdlib_downloads import download_tdlib_preview_file, start_tdlib_download_for_message
 
 
 class _FakeTdlibManager:
@@ -143,6 +145,52 @@ class _FakeTdlibManagerWithStaleRequestId:
         raise AssertionError(f"Unexpected TDLib request: {request_type}")
 
 
+class _FakePreviewDownloadManager:
+    def __init__(self, thumb_path: str) -> None:
+        self.thumb_path = thumb_path
+        self.requests: list[str] = []
+
+    def request(self, account_key: str, payload: dict, timeout_seconds: float):
+        del account_key, timeout_seconds
+        request_type = str(payload.get("@type") or "")
+        self.requests.append(request_type)
+        if request_type == "getFile":
+            return {
+                "@type": "file",
+                "id": 333,
+                "size": 99,
+                "expected_size": 99,
+                "local": {
+                    "is_downloading_completed": False,
+                    "is_downloading_active": False,
+                    "downloaded_size": 0,
+                    "path": "",
+                },
+                "remote": {
+                    "id": "remote-333",
+                    "unique_id": "thumb-a",
+                },
+            }
+        if request_type == "downloadFile":
+            return {
+                "@type": "file",
+                "id": 333,
+                "size": 99,
+                "expected_size": 99,
+                "local": {
+                    "is_downloading_completed": True,
+                    "is_downloading_active": False,
+                    "downloaded_size": 99,
+                    "path": self.thumb_path,
+                },
+                "remote": {
+                    "id": "remote-333",
+                    "unique_id": "thumb-a",
+                },
+            }
+        raise AssertionError(f"Unexpected TDLib request: {request_type}")
+
+
 class TdlibDownloadsTest(unittest.TestCase):
     def test_start_download_reuses_completed_duplicate_before_tdlib_download(
         self,
@@ -222,6 +270,94 @@ class TdlibDownloadsTest(unittest.TestCase):
         self.assertIn(("getFile", 321), td_manager.requests)
         self.assertNotIn(("addFileToDownloads", 999), td_manager.requests)
         self.assertNotIn(("downloadFile", 999), td_manager.requests)
+
+    def test_list_files_exposes_idle_thumbnail_and_lazy_download_persists_path(
+        self,
+    ) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_schema(conn)
+        upsert_tdlib_file_record(
+            conn,
+            file_payload={
+                "id": 222,
+                "telegramId": 1,
+                "uniqueId": "photo-a",
+                "messageId": 301,
+                "chatId": 100,
+                "mediaAlbumId": 0,
+                "fileName": "photo.jpg",
+                "type": "photo",
+                "mimeType": "image/jpeg",
+                "size": 4321,
+                "downloadedSize": 0,
+                "thumbnail": "mini",
+                "thumbnailFile": {
+                    "id": 333,
+                    "uniqueId": "thumb-a",
+                    "mimeType": "image/jpeg",
+                    "size": 99,
+                    "downloadedSize": 0,
+                    "downloadStatus": "idle",
+                    "localPath": "",
+                    "extra": {"width": 320, "height": 240},
+                },
+                "downloadStatus": "idle",
+                "date": 1710000000,
+                "caption": "",
+                "localPath": "",
+                "hasSensitiveContent": False,
+                "startDate": 0,
+                "completionDate": 0,
+                "transferStatus": "idle",
+                "extra": {"width": 640, "height": 480, "type": "x"},
+                "threadChatId": 0,
+                "messageThreadId": 0,
+                "reactionCount": 0,
+            },
+        )
+
+        files = list_files(conn, telegram_id=1, chat_id=100, filters={})["files"]
+        self.assertEqual(files[0]["thumbnailFile"]["uniqueId"], "thumb-a")
+        self.assertEqual(files[0]["thumbnailFile"]["downloadStatus"], "idle")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            thumb_path = Path(temp_dir) / "thumb-a.jpg"
+            thumb_path.write_bytes(b"thumb")
+            td_manager = _FakePreviewDownloadManager(str(thumb_path))
+
+            with patch(
+                "app.tdlib_downloads._load_tdlib_session_for_account",
+                return_value=True,
+            ):
+                info = download_tdlib_preview_file(
+                    td_manager,
+                    telegram_id=1,
+                    root_path="D:/tdlib/account-1",
+                    file_id=333,
+                    unique_id="thumb-a",
+                    mime_type="image/jpeg",
+                )
+
+            self.assertEqual(info["path"], str(thumb_path))
+            self.assertEqual(info["mimeType"], "image/jpeg")
+            self.assertEqual(td_manager.requests, ["getFile", "downloadFile"])
+            mark_file_preview_downloaded(
+                conn,
+                telegram_id=1,
+                unique_id="thumb-a",
+                local_path=str(info["path"]),
+                mime_type=str(info["mimeType"]),
+                size=int(info["size"]),
+                downloaded_size=int(info["downloadedSize"]),
+            )
+
+            thumb = conn.execute(
+                "SELECT local_path, download_status FROM file_record WHERE unique_id = ?",
+                ("thumb-a",),
+            ).fetchone()
+            self.assertEqual(str(thumb["local_path"] or ""), str(thumb_path))
+            self.assertEqual(str(thumb["download_status"] or ""), "completed")
 
 
 if __name__ == "__main__":

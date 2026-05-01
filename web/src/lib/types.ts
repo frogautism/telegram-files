@@ -92,6 +92,7 @@ export type VideoExtra = {
 export type Thumbnail = {
   uniqueId: string;
   mimeType: string;
+  downloadStatus?: DownloadStatus;
   extra: {
     width: number;
     height: number;

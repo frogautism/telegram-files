@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 _PREVIEW_CACHE_LOCK = Lock()
 _TDLIB_FILE_PREVIEW_CACHE: dict[tuple[int, str], dict[str, Any]] = {}
+_PREVIEW_DOWNLOAD_LOCKS_LOCK = Lock()
+_PREVIEW_DOWNLOAD_LOCKS: dict[tuple[int, int], Lock] = {}
 
 
 def _int_or_default(value: Any, default: int = 0) -> int:
@@ -157,6 +159,116 @@ def media_type_for_path(path: str, hint: str | None) -> str:
         return normalized_hint
     guessed, _ = mimetypes.guess_type(path)
     return str(guessed or "application/octet-stream")
+
+
+def _preview_download_lock(*, telegram_id: int, file_id: int) -> Lock:
+    key = (telegram_id, file_id)
+    with _PREVIEW_DOWNLOAD_LOCKS_LOCK:
+        lock = _PREVIEW_DOWNLOAD_LOCKS.get(key)
+        if lock is None:
+            lock = Lock()
+            _PREVIEW_DOWNLOAD_LOCKS[key] = lock
+        return lock
+
+
+def _completed_tdlib_file_info(
+    file_payload: dict[str, Any],
+    *,
+    mime_type_hint: str,
+) -> dict[str, Any] | None:
+    local = (
+        file_payload.get("local") if isinstance(file_payload.get("local"), dict) else {}
+    )
+    if not bool(local.get("is_downloading_completed")):
+        return None
+
+    resolved_path = str(local.get("path") or "").strip()
+    if not resolved_path:
+        return None
+
+    resolved_obj = Path(resolved_path)
+    if not resolved_obj.exists() or not resolved_obj.is_file():
+        return None
+
+    return {
+        "path": str(resolved_obj),
+        "mimeType": media_type_for_path(str(resolved_obj), mime_type_hint),
+        "size": max(
+            _int_or_default(file_payload.get("size"), 0),
+            _int_or_default(file_payload.get("expected_size"), 0),
+        ),
+        "downloadedSize": _int_or_default(local.get("downloaded_size"), 0),
+    }
+
+
+def download_tdlib_preview_file(
+    td_manager: TdlibAuthManager,
+    *,
+    telegram_id: int,
+    root_path: str,
+    file_id: int,
+    unique_id: str,
+    mime_type: str,
+) -> dict[str, Any] | None:
+    if file_id <= 0:
+        return None
+    if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
+        return None
+
+    with _preview_download_lock(telegram_id=telegram_id, file_id=file_id):
+        current = td_manager.request(
+            str(telegram_id),
+            {
+                "@type": "getFile",
+                "file_id": file_id,
+            },
+            timeout_seconds=15.0,
+        )
+        if str(current.get("@type") or "") == "file":
+            completed = _completed_tdlib_file_info(
+                current,
+                mime_type_hint=mime_type,
+            )
+            if completed is not None:
+                cache_tdlib_file_preview(
+                    telegram_id=telegram_id,
+                    unique_id=unique_id,
+                    file_id=file_id,
+                    mime_type=str(completed.get("mimeType") or mime_type),
+                    local_path=str(completed.get("path") or ""),
+                )
+                return completed
+
+        downloaded = td_manager.request(
+            str(telegram_id),
+            {
+                "@type": "downloadFile",
+                "file_id": file_id,
+                "priority": 1,
+                "offset": 0,
+                "limit": 0,
+                "synchronous": True,
+            },
+            timeout_seconds=15.0,
+        )
+        if str(downloaded.get("@type") or "") != "file":
+            return None
+
+        completed = _completed_tdlib_file_info(
+            downloaded,
+            mime_type_hint=mime_type,
+        )
+        if completed is None:
+            return None
+
+        cache_tdlib_file_preview(
+            telegram_id=telegram_id,
+            unique_id=unique_id,
+            file_id=file_id,
+            mime_type=str(completed.get("mimeType") or mime_type),
+            local_path=str(completed.get("path") or ""),
+        )
+        return completed
 
 
 def resolve_tdlib_preview_info(

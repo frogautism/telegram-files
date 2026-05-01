@@ -217,14 +217,12 @@ def _serialize_file_row(
     date_seconds = _safe_int(row["date"], 0)
     completion_date = row["completion_date"]
     thumbnail_file: dict[str, Any] | None = None
-    if thumbnail_row is not None and (
-        str(thumbnail_row["download_status"] or "") == "completed"
-        or str(thumbnail_row["local_path"] or "").strip() != ""
-    ):
+    if thumbnail_row is not None:
         thumbnail_file = {
             "uniqueId": str(thumbnail_row["unique_id"] or ""),
             "mimeType": str(thumbnail_row["mime_type"] or ""),
             "extra": _parse_extra(thumbnail_row["extra"]),
+            "downloadStatus": str(thumbnail_row["download_status"] or "idle"),
         }
 
     return {
@@ -882,6 +880,72 @@ def get_file_preview_info(
         "path": local_path,
         "mimeType": str(row["mime_type"] or "application/octet-stream"),
     }
+
+
+def get_file_preview_download_candidate(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    unique_id: str,
+) -> dict[str, Any] | None:
+    row = _find_file_by_unique(conn, telegram_id=telegram_id, unique_id=unique_id)
+    if row is None:
+        return None
+
+    return {
+        "fileId": _safe_int(row["id"], 0),
+        "uniqueId": str(row["unique_id"] or ""),
+        "type": str(row["type"] or ""),
+        "mimeType": str(row["mime_type"] or "application/octet-stream"),
+        "localPath": str(row["local_path"] or ""),
+        "downloadStatus": str(row["download_status"] or "idle"),
+    }
+
+
+def mark_file_preview_downloaded(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    unique_id: str,
+    local_path: str,
+    mime_type: str | None = None,
+    size: int = 0,
+    downloaded_size: int = 0,
+) -> None:
+    normalized_path = str(local_path or "").strip()
+    if not normalized_path:
+        return
+
+    normalized_mime = str(mime_type or "").strip()
+    size_value = _safe_int(size, 0)
+    downloaded_value = _safe_int(downloaded_size, 0)
+    completion_date = int(time.time() * 1000)
+
+    conn.execute(
+        """
+        UPDATE file_record
+        SET local_path = ?,
+            download_status = 'completed',
+            completion_date = ?,
+            mime_type = CASE WHEN ? != '' THEN ? ELSE mime_type END,
+            size = CASE WHEN ? > COALESCE(size, 0) THEN ? ELSE size END,
+            downloaded_size = CASE WHEN ? > COALESCE(downloaded_size, 0) THEN ? ELSE downloaded_size END
+        WHERE telegram_id = ? AND unique_id = ?
+        """,
+        (
+            normalized_path,
+            completion_date,
+            normalized_mime,
+            normalized_mime,
+            size_value,
+            size_value,
+            downloaded_value,
+            downloaded_value,
+            telegram_id,
+            unique_id,
+        ),
+    )
+    conn.commit()
 
 
 def _default_auto_settings() -> dict[str, Any]:

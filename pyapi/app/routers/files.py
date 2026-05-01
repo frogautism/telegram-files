@@ -14,10 +14,12 @@ from ..config import AppConfig
 from ..db import (
     count_files_by_type,
     get_chat_group,
+    get_file_preview_download_candidate,
     get_file_preview_info,
     get_files_count,
     get_telegram_account,
     list_files,
+    mark_file_preview_downloaded,
     update_file_tags,
     update_files_tags,
 )
@@ -29,6 +31,7 @@ from ..file_record_ops import (
 from ..route_utils import _bool_or_none, _get_filters, _int_or_default
 from ..tdlib_downloads import (
     cached_tdlib_file_preview as _cached_tdlib_file_preview,
+    download_tdlib_preview_file as _download_tdlib_preview_file,
     enrich_tdlib_thumbnails_for_files as _enrich_tdlib_thumbnails_for_files,
     media_type_for_path as _media_type_for_path,
     resolve_tdlib_preview_info as _resolve_tdlib_preview_info,
@@ -394,6 +397,62 @@ async def file_preview(
                             str(path_obj), str(cached.get("mimeType") or "")
                         ),
                     )
+
+        candidate = await asyncio.to_thread(
+            get_file_preview_download_candidate,
+            db,
+            telegram_id=telegramId,
+            unique_id=uniqueId,
+        )
+        if candidate is not None and str(candidate.get("type") or "") == "thumbnail":
+            td_manager = _tdlib_manager_from_app(request.app)
+            if td_manager is not None:
+                config: AppConfig = request.app.state.config
+                account = await asyncio.to_thread(
+                    get_telegram_account,
+                    db,
+                    telegram_id=telegramId,
+                    app_root=str(config.app_root),
+                )
+                if account is not None:
+                    try:
+                        info = await asyncio.to_thread(
+                            _download_tdlib_preview_file,
+                            td_manager,
+                            telegram_id=telegramId,
+                            root_path=str(account.get("rootPath") or ""),
+                            file_id=_int_or_default(candidate.get("fileId"), 0),
+                            unique_id=str(candidate.get("uniqueId") or uniqueId),
+                            mime_type=str(
+                                candidate.get("mimeType")
+                                or "application/octet-stream"
+                            ),
+                        )
+                    except Exception:
+                        info = None
+
+                    if info is not None:
+                        await asyncio.to_thread(
+                            mark_file_preview_downloaded,
+                            db,
+                            telegram_id=telegramId,
+                            unique_id=uniqueId,
+                            local_path=str(info.get("path") or ""),
+                            mime_type=str(info.get("mimeType") or ""),
+                            size=_int_or_default(info.get("size"), 0),
+                            downloaded_size=_int_or_default(
+                                info.get("downloadedSize"), 0
+                            ),
+                        )
+
+        if info is not None:
+            path = Path(str(info["path"]))
+            if not path.exists() or not path.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+            return FileResponse(
+                path=str(path),
+                media_type=str(info.get("mimeType") or "application/octet-stream"),
+            )
 
         td_manager = _tdlib_manager_from_app(request.app)
         if td_manager is not None:
