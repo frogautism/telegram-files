@@ -212,6 +212,15 @@ export type AutoTransferRule = {
   extra: Record<string, any>;
 };
 
+export type AutoTransferPreset = {
+  id: string;
+  telegramId: number;
+  name: string;
+  rule: AutoTransferRule;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type AutoDownloadRule = {
   query: string;
   fileTypes: Array<Exclude<FileType, "media">>;

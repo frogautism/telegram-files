@@ -8,16 +8,22 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
+import useSWR from "swr";
 import useSWRMutation from "swr/mutation";
-import { POST } from "@/lib/api";
+import { POST, request } from "@/lib/api";
 import { useDebounce } from "use-debounce";
 import { useToast } from "@/hooks/use-toast";
 import { AutomationButton } from "@/components/automation-button";
 import { useTelegramChat } from "@/hooks/use-telegram-chat";
 import { useTelegramAccount } from "@/hooks/use-telegram-account";
 import { Label } from "@/components/ui/label";
-import { type Auto } from "@/lib/types";
+import {
+  type Auto,
+  type AutoTransferPreset,
+  type AutoTransferRule,
+  type TelegramChat,
+} from "@/lib/types";
 import { Badge } from "./ui/badge";
 import { cn } from "@/lib/utils";
 import AutomationForm from "@/components/automation-form";
@@ -52,17 +58,60 @@ const DEFAULT_AUTO: Auto = {
 export default function AutomationDialog() {
   const { accountId } = useTelegramAccount();
   const { isLoading, chat, reload } = useTelegramChat();
+
+  if (isLoading) {
+    return (
+      <div className="h-10 w-36 animate-pulse rounded-md bg-muted"></div>
+    );
+  }
+
+  if (!accountId || !chat) {
+    return null;
+  }
+
+  return (
+    <AutomationDialogContent
+      key={`${accountId}:${chat.id}:${chat.groupId ?? ""}`}
+      accountId={accountId}
+      chat={chat}
+      reload={reload}
+    />
+  );
+}
+
+function AutomationDialogContent({
+  accountId,
+  chat,
+  reload,
+}: {
+  accountId: string;
+  chat: TelegramChat;
+  reload: () => Promise<unknown>;
+}) {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
-  const [auto, setAuto] = useState<Auto>(DEFAULT_AUTO);
+  const [auto, setAuto] = useState<Auto>(() => autoFromChat(chat.auto));
+  const [presetName, setPresetName] = useState("");
+  const [isPresetSaving, setIsPresetSaving] = useState(false);
+  const [deletingPresetId, setDeletingPresetId] = useState("");
   const isGroupChat = Boolean(chat?.id && isGroupChatId(chat.id));
-  const { trigger: triggerAuto, isMutating: isAutoMutating } = useSWRMutation(
-    !accountId || !chat
+  const {
+    data: transferPresets = [],
+    mutate: mutateTransferPresets,
+  } = useSWR<AutoTransferPreset[]>(
+    accountId.startsWith("pending-")
       ? undefined
-      : isGroupChat && chat?.groupId
-        ? `/${accountId}/chat-group/${chat.groupId}/update-auto-settings`
-        : `/${accountId}/file/update-auto-settings?telegramId=${accountId}&chatId=${chat?.id}`,
+      : `/${accountId}/auto-transfer-presets`,
+    (key) => request<AutoTransferPreset[]>(key),
+    {
+      revalidateOnFocus: false,
+    },
+  );
+  const { trigger: triggerAuto, isMutating: isAutoMutating } = useSWRMutation(
+    isGroupChat && chat.groupId
+      ? `/${accountId}/chat-group/${chat.groupId}/update-auto-settings`
+      : `/${accountId}/file/update-auto-settings?telegramId=${accountId}&chatId=${chat.id}`,
     (
       key: string,
       {
@@ -92,19 +141,70 @@ export default function AutomationDialog() {
     leading: true,
   });
 
-  useEffect(() => {
-    if (chat?.auto) {
-      setAuto(chat.auto);
-    } else {
-      setAuto(DEFAULT_AUTO);
-    }
-  }, [chat]);
+  const handleApplyPreset = (preset: AutoTransferPreset) => {
+    setAuto({
+      ...auto,
+      transfer: {
+        enabled: true,
+        rule: cloneTransferRule(preset.rule),
+      },
+    });
+    setPresetName(preset.name);
+    toast({
+      variant: "success",
+      title: "Transfer preset applied",
+    });
+  };
 
-  if (isLoading) {
-    return (
-      <div className="h-10 w-36 animate-pulse rounded-md bg-muted"></div>
-    );
-  }
+  const handleSavePreset = async () => {
+    const name = presetName.trim();
+    if (!name) {
+      toast({
+        variant: "warning",
+        title: "Preset name is required",
+      });
+      return;
+    }
+
+    const validationError = transferRuleValidationError(auto.transfer.rule);
+    if (validationError) {
+      toast({
+        variant: "warning",
+        title: validationError,
+      });
+      return;
+    }
+
+    setIsPresetSaving(true);
+    try {
+      await POST(`/${accountId}/auto-transfer-presets`, {
+        name,
+        rule: auto.transfer.rule,
+      });
+      await mutateTransferPresets();
+      setPresetName("");
+      toast({
+        variant: "success",
+        title: "Transfer preset saved",
+      });
+    } finally {
+      setIsPresetSaving(false);
+    }
+  };
+
+  const handleDeletePreset = async (preset: AutoTransferPreset) => {
+    setDeletingPresetId(preset.id);
+    try {
+      await POST(`/${accountId}/auto-transfer-presets/${preset.id}/delete`);
+      await mutateTransferPresets();
+      toast({
+        variant: "success",
+        title: "Transfer preset deleted",
+      });
+    } finally {
+      setDeletingPresetId("");
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -115,7 +215,7 @@ export default function AutomationDialog() {
           setOpen(!open);
         }}
       >
-        {chat && <AutomationButton auto={chat.auto} />}
+        <AutomationButton auto={chat.auto} />
       </DialogTrigger>
       <DialogContent
         aria-describedby={undefined}
@@ -348,7 +448,18 @@ export default function AutomationDialog() {
             </div>
           </div>
         ) : (
-          <AutomationForm auto={auto} onChange={setAuto} />
+          <AutomationForm
+            auto={auto}
+            onChange={setAuto}
+            transferPresets={transferPresets}
+            presetName={presetName}
+            onPresetNameChange={setPresetName}
+            onApplyTransferPreset={handleApplyPreset}
+            onSaveTransferPreset={handleSavePreset}
+            onDeleteTransferPreset={handleDeletePreset}
+            isPresetSaving={isPresetSaving}
+            deletingPresetId={deletingPresetId}
+          />
         )}
         <DialogFooter className="gap-2 border-t border-border pt-4">
           {!editMode && chat?.auto ? (
@@ -366,16 +477,13 @@ export default function AutomationDialog() {
               </Button>
               <Button
                 onClick={() => {
-                  const folderPathRegex =
-                    /^[\/\\]?(?:[^<>:"|?*\/\\]+[\/\\]?)*$/;
-                  if (
-                    auto?.transfer.enabled &&
-                    (auto?.transfer.rule.destination.length === 0 ||
-                      !folderPathRegex.test(auto?.transfer.rule.destination))
-                  ) {
+                  const validationError = transferRuleValidationError(
+                    auto.transfer.rule,
+                  );
+                  if (auto.transfer.enabled && validationError) {
                     toast({
                       variant: "warning",
-                      title: "Invalid destination folder",
+                      title: validationError,
                       description:
                         "Please enter a valid destination folder path",
                     });
@@ -393,4 +501,51 @@ export default function AutomationDialog() {
       </DialogContent>
     </Dialog>
   );
+}
+
+function cloneTransferRule(rule: AutoTransferRule): AutoTransferRule {
+  return {
+    transferHistory: Boolean(rule.transferHistory),
+    destination: rule.destination ?? "",
+    transferPolicy: rule.transferPolicy ?? "GROUP_BY_CHAT",
+    duplicationPolicy: rule.duplicationPolicy ?? "OVERWRITE",
+    extra: { ...(rule.extra ?? {}) },
+  };
+}
+
+function autoFromChat(auto?: TelegramChat["auto"]): Auto {
+  return {
+    preload: {
+      enabled: Boolean(auto?.preload.enabled ?? DEFAULT_AUTO.preload.enabled),
+    },
+    download: {
+      enabled: Boolean(auto?.download.enabled ?? DEFAULT_AUTO.download.enabled),
+      rule: {
+        query: auto?.download.rule.query ?? DEFAULT_AUTO.download.rule.query,
+        fileTypes: [...(auto?.download.rule.fileTypes ?? [])],
+        downloadHistory: Boolean(
+          auto?.download.rule.downloadHistory ??
+            DEFAULT_AUTO.download.rule.downloadHistory,
+        ),
+        downloadCommentFiles: Boolean(
+          auto?.download.rule.downloadCommentFiles ??
+            DEFAULT_AUTO.download.rule.downloadCommentFiles,
+        ),
+        filterExpr:
+          auto?.download.rule.filterExpr ?? DEFAULT_AUTO.download.rule.filterExpr,
+      },
+    },
+    transfer: {
+      enabled: Boolean(auto?.transfer.enabled ?? DEFAULT_AUTO.transfer.enabled),
+      rule: cloneTransferRule(auto?.transfer.rule ?? DEFAULT_AUTO.transfer.rule),
+    },
+  };
+}
+
+function transferRuleValidationError(rule: AutoTransferRule): string | null {
+  const folderPathRegex = /^[\/\\]?(?:[^<>:"|?*\/\\]+[\/\\]?)*$/;
+  if (rule.destination.length === 0 || !folderPathRegex.test(rule.destination)) {
+    return "Invalid destination folder";
+  }
+  return null;
 }

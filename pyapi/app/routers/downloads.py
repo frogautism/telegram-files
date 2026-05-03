@@ -4,6 +4,7 @@ import asyncio
 import logging
 import sqlite3
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
@@ -18,8 +19,11 @@ from ..app_state import (
 from ..config import AppConfig
 from ..db import (
     cancel_file_download,
+    delete_auto_transfer_preset,
     get_telegram_account,
+    list_auto_transfer_presets,
     remove_file_download,
+    save_auto_transfer_preset,
     start_file_download,
     toggle_pause_file_download,
     update_auto_settings,
@@ -391,6 +395,65 @@ def file_update_auto_settings_route(
         chat_id=chatId,
         auto_payload=auto_payload,
     )
+    return Response(status_code=200)
+
+
+@router.get("/{telegramId}/auto-transfer-presets")
+def auto_transfer_presets_route(
+    telegramId: int,
+    db: sqlite3.Connection = Depends(get_db),
+) -> list[dict[str, Any]]:
+    if _is_pending_account(str(telegramId)):
+        return []
+
+    return list_auto_transfer_presets(db, telegram_id=telegramId)
+
+
+@router.post("/{telegramId}/auto-transfer-presets")
+def auto_transfer_preset_save_route(
+    telegramId: int,
+    payload: dict[str, Any] | None = None,
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    if _is_pending_account(str(telegramId)):
+        raise HTTPException(
+            status_code=400,
+            detail="Pending account does not support transfer presets.",
+        )
+
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    preset_id = str(normalized_payload.get("id") or uuid4().hex)
+    try:
+        return save_auto_transfer_preset(
+            db,
+            telegram_id=telegramId,
+            preset_id=preset_id,
+            name=str(normalized_payload.get("name") or ""),
+            rule_payload=normalized_payload.get("rule"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{telegramId}/auto-transfer-presets/{presetId}/delete")
+def auto_transfer_preset_delete_route(
+    telegramId: int,
+    presetId: str,
+    db: sqlite3.Connection = Depends(get_db),
+) -> Response:
+    if _is_pending_account(str(telegramId)):
+        raise HTTPException(
+            status_code=400,
+            detail="Pending account does not support transfer presets.",
+        )
+
+    deleted = delete_auto_transfer_preset(
+        db,
+        telegram_id=telegramId,
+        preset_id=presetId,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Transfer preset not found.")
     return Response(status_code=200)
 
 

@@ -3,6 +3,7 @@ import { Switch } from "@/components/ui/switch";
 import {
   type Auto,
   type AutoDownloadRule,
+  type AutoTransferPreset,
   type AutoTransferRule,
   DuplicationPolicies,
   type DuplicationPolicy,
@@ -26,7 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Check, ChevronsUpDown, X } from "lucide-react";
+import { Check, ChevronsUpDown, Save, Trash2, X } from "lucide-react";
 import {
   Popover,
   PopoverContent,
@@ -52,11 +53,27 @@ import Link from "next/link";
 interface AutomationFormProps {
   auto: Auto;
   onChange: (auto: Auto) => void;
+  transferPresets?: AutoTransferPreset[];
+  presetName?: string;
+  onPresetNameChange?: (value: string) => void;
+  onApplyTransferPreset?: (preset: AutoTransferPreset) => void;
+  onSaveTransferPreset?: () => void;
+  onDeleteTransferPreset?: (preset: AutoTransferPreset) => void;
+  isPresetSaving?: boolean;
+  deletingPresetId?: string;
 }
 
 export default function AutomationForm({
   auto,
   onChange,
+  transferPresets = [],
+  presetName = "",
+  onPresetNameChange,
+  onApplyTransferPreset,
+  onSaveTransferPreset,
+  onDeleteTransferPreset,
+  isPresetSaving = false,
+  deletingPresetId = "",
 }: AutomationFormProps) {
   return (
     <div className="space-y-4">
@@ -177,6 +194,16 @@ export default function AutomationForm({
                 </p>
               </div>
             </InfoPanel>
+            <TransferPresetControls
+              presets={transferPresets}
+              presetName={presetName}
+              onPresetNameChange={onPresetNameChange}
+              onApplyPreset={onApplyTransferPreset}
+              onSavePreset={onSaveTransferPreset}
+              onDeletePreset={onDeleteTransferPreset}
+              isSaving={isPresetSaving}
+              deletingPresetId={deletingPresetId}
+            />
             <TransferRule
               value={auto.transfer.rule}
               onChange={(value) => {
@@ -192,6 +219,98 @@ export default function AutomationForm({
           </>
         )}
       </AutomationSection>
+    </div>
+  );
+}
+
+function TransferPresetControls({
+  presets,
+  presetName,
+  onPresetNameChange,
+  onApplyPreset,
+  onSavePreset,
+  onDeletePreset,
+  isSaving,
+  deletingPresetId,
+}: {
+  presets: AutoTransferPreset[];
+  presetName: string;
+  onPresetNameChange?: (value: string) => void;
+  onApplyPreset?: (preset: AutoTransferPreset) => void;
+  onSavePreset?: () => void;
+  onDeletePreset?: (preset: AutoTransferPreset) => void;
+  isSaving: boolean;
+  deletingPresetId: string;
+}) {
+  const [selectedPresetId, setSelectedPresetId] = useState("");
+  const selectedPreset = presets.find((preset) => preset.id === selectedPresetId);
+
+  return (
+    <div className="space-y-4 rounded-md border border-border bg-card p-4">
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <div className="flex-1 space-y-2">
+          <Label htmlFor="transfer-preset-name">Preset name</Label>
+          <Input
+            id="transfer-preset-name"
+            placeholder="Name this transfer setup"
+            value={presetName}
+            onChange={(e) => onPresetNameChange?.(e.target.value)}
+          />
+        </div>
+        <div className="flex items-end">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onSavePreset}
+            disabled={isSaving || !onSavePreset}
+            className="w-full sm:w-auto"
+          >
+            <Save className="h-4 w-4" />
+            {isSaving ? "Saving..." : "Save preset"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+        <Select value={selectedPresetId} onValueChange={setSelectedPresetId}>
+          <SelectTrigger>
+            <SelectValue
+              placeholder={
+                presets.length > 0 ? "Select a preset" : "No presets saved"
+              }
+            />
+          </SelectTrigger>
+          <SelectContent>
+            {presets.map((preset) => (
+              <SelectItem key={preset.id} value={preset.id}>
+                {preset.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => selectedPreset && onApplyPreset?.(selectedPreset)}
+          disabled={!selectedPreset || !onApplyPreset}
+        >
+          Apply
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => selectedPreset && onDeletePreset?.(selectedPreset)}
+          disabled={
+            !selectedPreset ||
+            !onDeletePreset ||
+            deletingPresetId === selectedPreset.id
+          }
+          aria-label="Delete selected preset"
+        >
+          <Trash2 className="h-4 w-4" />
+          {deletingPresetId === selectedPreset?.id ? "Deleting..." : "Delete"}
+        </Button>
+      </div>
     </div>
   );
 }

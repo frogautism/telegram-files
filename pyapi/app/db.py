@@ -977,6 +977,181 @@ def _default_auto_settings() -> dict[str, Any]:
     }
 
 
+def _default_auto_transfer_rule() -> dict[str, Any]:
+    return deepcopy(_default_auto_settings()["transfer"]["rule"])
+
+
+def _coerce_auto_transfer_rule(rule_payload: Any) -> dict[str, Any]:
+    rule = _deep_merge_dict(
+        _default_auto_transfer_rule(),
+        deepcopy(rule_payload) if isinstance(rule_payload, dict) else {},
+    )
+    rule["transferHistory"] = _to_bool(rule.get("transferHistory"))
+    rule["destination"] = str(rule.get("destination") or "").strip()
+
+    transfer_policy = str(rule.get("transferPolicy") or "GROUP_BY_CHAT").strip()
+    if transfer_policy not in {
+        "DIRECT",
+        "GROUP_BY_CHAT",
+        "GROUP_BY_TYPE",
+        "GROUP_BY_AI",
+        "GROUP_BY_HASHTAG",
+    }:
+        transfer_policy = "GROUP_BY_CHAT"
+    rule["transferPolicy"] = transfer_policy
+
+    duplication_policy = str(rule.get("duplicationPolicy") or "OVERWRITE").strip()
+    if duplication_policy not in {"OVERWRITE", "RENAME", "SKIP", "HASH"}:
+        duplication_policy = "OVERWRITE"
+    rule["duplicationPolicy"] = duplication_policy
+
+    if not isinstance(rule.get("extra"), dict):
+        rule["extra"] = {}
+    return rule
+
+
+def _load_auto_transfer_preset_items(
+    conn: sqlite3.Connection,
+) -> list[dict[str, Any]]:
+    row = conn.execute(
+        "SELECT value FROM setting_record WHERE key = 'autoTransferPresets' LIMIT 1"
+    ).fetchone()
+    if row is None:
+        return []
+
+    raw = row["value"]
+    if raw is None or str(raw).strip() == "":
+        return []
+
+    try:
+        parsed = json.loads(str(raw))
+    except json.JSONDecodeError:
+        return []
+
+    if isinstance(parsed, dict) and isinstance(parsed.get("presets"), list):
+        return [item for item in parsed["presets"] if isinstance(item, dict)]
+
+    if isinstance(parsed, list):
+        return [item for item in parsed if isinstance(item, dict)]
+
+    return []
+
+
+def _save_auto_transfer_preset_items(
+    conn: sqlite3.Connection,
+    items: list[dict[str, Any]],
+) -> None:
+    payload = json.dumps({"presets": items}, separators=(",", ":"))
+    conn.execute(
+        """
+        INSERT INTO setting_record(key, value)
+        VALUES('autoTransferPresets', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (payload,),
+    )
+    conn.commit()
+
+
+def list_auto_transfer_presets(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+) -> list[dict[str, Any]]:
+    items = _load_auto_transfer_preset_items(conn)
+    presets: list[dict[str, Any]] = []
+    for item in items:
+        if _safe_int(item.get("telegramId"), 0) != telegram_id:
+            continue
+        preset_id = str(item.get("id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not preset_id or not name:
+            continue
+        presets.append(
+            {
+                "id": preset_id,
+                "telegramId": telegram_id,
+                "name": name,
+                "rule": _coerce_auto_transfer_rule(item.get("rule")),
+                "createdAt": _safe_int(item.get("createdAt"), 0),
+                "updatedAt": _safe_int(item.get("updatedAt"), 0),
+            }
+        )
+    return presets
+
+
+def save_auto_transfer_preset(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    preset_id: str,
+    name: str,
+    rule_payload: Any,
+) -> dict[str, Any]:
+    normalized_id = str(preset_id or "").strip()
+    if not normalized_id:
+        raise ValueError("presetId is required.")
+
+    normalized_name = str(name or "").strip()
+    if not normalized_name:
+        raise ValueError("Preset name is required.")
+
+    now_ms = int(time.time() * 1000)
+    rule = _coerce_auto_transfer_rule(rule_payload)
+    items = _load_auto_transfer_preset_items(conn)
+    existing: dict[str, Any] | None = None
+    kept: list[dict[str, Any]] = []
+    for item in items:
+        same_account = _safe_int(item.get("telegramId"), 0) == telegram_id
+        same_id = str(item.get("id") or "").strip() == normalized_id
+        if same_account and same_id:
+            existing = item
+            continue
+        kept.append(item)
+
+    preset = {
+        "id": normalized_id,
+        "telegramId": telegram_id,
+        "name": normalized_name,
+        "rule": rule,
+        "createdAt": _safe_int(
+            existing.get("createdAt") if existing is not None else None,
+            now_ms,
+        ),
+        "updatedAt": now_ms,
+    }
+    kept.append(preset)
+    _save_auto_transfer_preset_items(conn, kept)
+    return deepcopy(preset)
+
+
+def delete_auto_transfer_preset(
+    conn: sqlite3.Connection,
+    *,
+    telegram_id: int,
+    preset_id: str,
+) -> bool:
+    normalized_id = str(preset_id or "").strip()
+    if not normalized_id:
+        return False
+
+    items = _load_auto_transfer_preset_items(conn)
+    kept: list[dict[str, Any]] = []
+    deleted = False
+    for item in items:
+        if (
+            _safe_int(item.get("telegramId"), 0) == telegram_id
+            and str(item.get("id") or "").strip() == normalized_id
+        ):
+            deleted = True
+            continue
+        kept.append(item)
+
+    if deleted:
+        _save_auto_transfer_preset_items(conn, kept)
+    return deleted
+
+
 def _load_automation_items(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     row = conn.execute(
         "SELECT value FROM setting_record WHERE key = 'automation' LIMIT 1"

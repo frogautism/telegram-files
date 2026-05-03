@@ -19,6 +19,9 @@ from app.automation_workers import (
 from app.db import init_schema
 from app.db import (
     create_chat_group,
+    delete_auto_transfer_preset,
+    list_auto_transfer_presets,
+    save_auto_transfer_preset,
     update_auto_settings,
     update_chat_group_auto_settings,
 )
@@ -436,6 +439,87 @@ class TransferOpsTest(unittest.TestCase):
             self.assertEqual(queued["chatId"], 100)
             self.assertEqual(queued["fileId"], 222)
             self.assertEqual(queued["uniqueId"], "album-second")
+
+    def test_auto_transfer_presets_are_account_scoped_and_normalized(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_schema(conn)
+
+        saved = save_auto_transfer_preset(
+            conn,
+            telegram_id=1,
+            preset_id="preset-1",
+            name="Archive",
+            rule_payload={
+                "transferHistory": False,
+                "destination": "exports",
+                "transferPolicy": "GROUP_BY_HASHTAG",
+                "duplicationPolicy": "RENAME",
+                "extra": {
+                    "hashtagRules": [
+                        {
+                            "hashtag": "trip",
+                            "folder": "Trips",
+                            "matchType": "EXACT",
+                        }
+                    ]
+                },
+            },
+        )
+        save_auto_transfer_preset(
+            conn,
+            telegram_id=2,
+            preset_id="preset-2",
+            name="Other Account",
+            rule_payload={"destination": "other"},
+        )
+
+        self.assertEqual(saved["name"], "Archive")
+
+        presets = list_auto_transfer_presets(conn, telegram_id=1)
+        self.assertEqual(len(presets), 1)
+        self.assertEqual(presets[0]["id"], "preset-1")
+        self.assertEqual(presets[0]["rule"]["transferHistory"], False)
+        self.assertEqual(presets[0]["rule"]["destination"], "exports")
+        self.assertEqual(presets[0]["rule"]["transferPolicy"], "GROUP_BY_HASHTAG")
+        self.assertEqual(presets[0]["rule"]["duplicationPolicy"], "RENAME")
+        self.assertEqual(
+            presets[0]["rule"]["extra"]["hashtagRules"][0]["folder"],
+            "Trips",
+        )
+
+    def test_auto_transfer_preset_delete_keeps_other_accounts(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_schema(conn)
+
+        save_auto_transfer_preset(
+            conn,
+            telegram_id=1,
+            preset_id="shared-id",
+            name="One",
+            rule_payload={"destination": "one"},
+        )
+        save_auto_transfer_preset(
+            conn,
+            telegram_id=2,
+            preset_id="shared-id",
+            name="Two",
+            rule_payload={"destination": "two"},
+        )
+
+        self.assertTrue(
+            delete_auto_transfer_preset(
+                conn,
+                telegram_id=1,
+                preset_id="shared-id",
+            )
+        )
+        self.assertEqual(list_auto_transfer_presets(conn, telegram_id=1), [])
+        self.assertEqual(
+            list_auto_transfer_presets(conn, telegram_id=2)[0]["name"],
+            "Two",
+        )
 
 
 if __name__ == "__main__":
