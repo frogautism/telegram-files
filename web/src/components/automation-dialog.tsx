@@ -93,6 +93,7 @@ function AutomationDialogContent({
   const [editMode, setEditMode] = useState(false);
   const [auto, setAuto] = useState<Auto>(() => autoFromChat(chat.auto));
   const [presetName, setPresetName] = useState("");
+  const [appliedPresetId, setAppliedPresetId] = useState("");
   const [isPresetSaving, setIsPresetSaving] = useState(false);
   const [deletingPresetId, setDeletingPresetId] = useState("");
   const isGroupChat = Boolean(chat?.id && isGroupChatId(chat.id));
@@ -150,6 +151,7 @@ function AutomationDialogContent({
       },
     });
     setPresetName(preset.name);
+    setAppliedPresetId(preset.id);
     toast({
       variant: "success",
       title: "Transfer preset applied",
@@ -178,11 +180,13 @@ function AutomationDialogContent({
     setIsPresetSaving(true);
     try {
       await POST(`/${accountId}/auto-transfer-presets`, {
+        id: appliedPresetId || undefined,
         name,
         rule: auto.transfer.rule,
       });
       await mutateTransferPresets();
       setPresetName("");
+      setAppliedPresetId("");
       toast({
         variant: "success",
         title: "Transfer preset saved",
@@ -197,6 +201,10 @@ function AutomationDialogContent({
     try {
       await POST(`/${accountId}/auto-transfer-presets/${preset.id}/delete`);
       await mutateTransferPresets();
+      if (appliedPresetId === preset.id) {
+        setAppliedPresetId("");
+        setPresetName("");
+      }
       toast({
         variant: "success",
         title: "Transfer preset deleted",

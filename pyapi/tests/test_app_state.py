@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from app import app_state
 
@@ -161,6 +161,66 @@ class AppStateTest(unittest.IsolatedAsyncioTestCase):
                 },
             )
 
+        upsert_mock.assert_called_once_with(db, file_payload=file_payload)
+        emit_mock.assert_not_awaited()
+
+    async def test_handle_tdlib_update_refreshes_edited_message_content(self) -> None:
+        app_state.SESSION_TELEGRAM_SELECTION.clear()
+
+        db = object()
+        app = SimpleNamespace(state=SimpleNamespace(db=db))
+        refreshed_message = {
+            "@type": "message",
+            "id": 400,
+            "chat_id": 102,
+            "content": {
+                "@type": "messageDocument",
+                "caption": {"text": "edited #trip"},
+            },
+        }
+        file_payload = {
+            "id": 11,
+            "telegramId": 1,
+            "uniqueId": "unique-11",
+            "chatId": 102,
+            "messageId": 400,
+            "caption": "edited #trip",
+        }
+        td_manager = SimpleNamespace(request=Mock(return_value=refreshed_message))
+
+        emit_mock = AsyncMock()
+        with (
+            patch("app.app_state._tdlib_manager_from_app", return_value=td_manager),
+            patch(
+                "app.app_state.td_message_to_file", return_value=file_payload
+            ) as map_mock,
+            patch("app.app_state.upsert_tdlib_file_record") as upsert_mock,
+            patch("app.app_state._emit_ws_payload", emit_mock),
+        ):
+            await app_state._handle_tdlib_update(
+                app,
+                "1",
+                {
+                    "@type": "updateMessageContent",
+                    "chat_id": 102,
+                    "message_id": 400,
+                    "new_content": {
+                        "@type": "messageDocument",
+                        "caption": {"text": "edited #trip"},
+                    },
+                },
+            )
+
+        td_manager.request.assert_called_once_with(
+            "1",
+            {
+                "@type": "getMessage",
+                "chat_id": 102,
+                "message_id": 400,
+            },
+            timeout_seconds=15.0,
+        )
+        map_mock.assert_called_once_with(1, refreshed_message)
         upsert_mock.assert_called_once_with(db, file_payload=file_payload)
         emit_mock.assert_not_awaited()
 

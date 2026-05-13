@@ -52,6 +52,7 @@ CHAT_UPDATE_TYPES = {
     "updateNewMessage",
     "updateMessageSendSucceeded",
     "updateMessageContent",
+    "updateMessageEdited",
     "updateDeleteMessages",
     "updateChatLastMessage",
     "updateChatPosition",
@@ -59,6 +60,11 @@ CHAT_UPDATE_TYPES = {
     "updateChatUnreadMentionCount",
     "updateChatUnreadReactionCount",
     "updateChatIsMarkedAsUnread",
+}
+
+MESSAGE_REFRESH_UPDATE_TYPES = {
+    "updateMessageContent",
+    "updateMessageEdited",
 }
 
 
@@ -295,7 +301,61 @@ def _tdlib_update_message(td_update: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _persist_tdlib_file_update(
+async def _refresh_tdlib_update_message(
+    app: FastAPI,
+    telegram_id: str,
+    td_update: dict[str, Any],
+) -> dict[str, Any] | None:
+    update_type = str(td_update.get("@type") or "")
+    if update_type not in MESSAGE_REFRESH_UPDATE_TYPES:
+        return None
+
+    chat_id = _int_or_default(td_update.get("chat_id"), 0)
+    message_id = _int_or_default(td_update.get("message_id"), 0)
+    if chat_id == 0 or message_id == 0:
+        return None
+
+    td_manager = _tdlib_manager_from_app(app)
+    if td_manager is None:
+        return None
+
+    try:
+        message = await asyncio.to_thread(
+            td_manager.request,
+            str(telegram_id),
+            {
+                "@type": "getMessage",
+                "chat_id": chat_id,
+                "message_id": message_id,
+            },
+            timeout_seconds=15.0,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to refresh edited TDLib message for telegram=%s chat=%s message=%s: %s",
+            telegram_id,
+            chat_id,
+            message_id,
+            exc,
+        )
+        return None
+
+    if not isinstance(message, dict):
+        return None
+
+    if str(message.get("@type") or "") == "error":
+        logger.warning(
+            "Failed to refresh edited TDLib message for telegram=%s chat=%s message=%s: %s",
+            telegram_id,
+            chat_id,
+            message_id,
+            str(message.get("message") or "Message not found"),
+        )
+        return None
+    return message
+
+
+async def _persist_tdlib_file_update(
     app: FastAPI,
     telegram_id: str,
     td_update: dict[str, Any],
@@ -310,6 +370,8 @@ def _persist_tdlib_file_update(
         return
 
     message = _tdlib_update_message(td_update)
+    if message is None:
+        message = await _refresh_tdlib_update_message(app, telegram_id, td_update)
     if message is None:
         return
 
@@ -478,7 +540,7 @@ async def _handle_tdlib_update(
     if payload_data is None:
         return
 
-    _persist_tdlib_file_update(app, telegram_id, td_update)
+    await _persist_tdlib_file_update(app, telegram_id, td_update)
 
     session_ids = _session_ids_for_telegram(str(telegram_id))
     if not session_ids:
