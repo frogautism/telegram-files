@@ -38,6 +38,14 @@ from ..download_runtime import (
     _td_file_status_payload,
     _tdlib_account_root_path,
 )
+from ..download_jobs import (
+    cancel_download_job as _cancel_download_job,
+    complete_download_job_for_file as _complete_download_job_for_file,
+    mark_download_job_failed as _mark_download_job_failed,
+    mark_download_job_monitoring as _mark_download_job_monitoring,
+    mark_download_job_starting as _mark_download_job_starting,
+    upsert_download_job as _upsert_download_job,
+)
 from ..file_record_ops import (
     upsert_tdlib_file_record as _db_upsert_tdlib_file_record,
 )
@@ -87,6 +95,22 @@ async def file_start_download_route(
             app_root=str(config.app_root),
         )
         if account is not None:
+            _upsert_download_job(
+                db,
+                telegram_id=telegramId,
+                chat_id=chat_id,
+                message_id=message_id,
+                file_id=file_id,
+                session_id=_session_id_from_request(request),
+                source="manual",
+            )
+            _mark_download_job_starting(
+                db,
+                telegram_id=telegramId,
+                chat_id=chat_id,
+                message_id=message_id,
+                file_id=file_id,
+            )
             try:
                 file_record = await asyncio.to_thread(
                     _start_tdlib_download_for_message,
@@ -102,6 +126,14 @@ async def file_start_download_route(
                 _db_upsert_tdlib_file_record(db, file_payload=file_record)
             except Exception as exc:
                 tdlib_start_error = str(exc)
+                _mark_download_job_failed(
+                    db,
+                    telegram_id=telegramId,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    file_id=file_id,
+                    error=tdlib_start_error,
+                )
                 logger.warning(
                     "TDLib start download failed telegram=%s chat=%s message=%s file=%s: %s",
                     telegramId,
@@ -145,12 +177,35 @@ async def file_start_download_route(
     ):
         unique_id = str(file_record.get("uniqueId") or "").strip()
         monitor_file_id = _int_or_default(file_record.get("id"), file_id)
+        _mark_download_job_monitoring(
+            db,
+            telegram_id=telegramId,
+            chat_id=chat_id,
+            message_id=message_id,
+            file_id=file_id,
+            unique_id=unique_id,
+            expected_size=_int_or_default(file_record.get("size"), 0),
+            downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
+        )
         _ensure_tdlib_download_monitor(
             request.app,
             session_id=session_id,
             telegram_id=telegramId,
             file_id=monitor_file_id,
             unique_id=unique_id,
+        )
+    elif (
+        started_via_tdlib
+        and str(file_record.get("downloadStatus") or "").strip() == "completed"
+    ):
+        _complete_download_job_for_file(
+            db,
+            telegram_id=telegramId,
+            file_id=_int_or_default(file_record.get("id"), file_id),
+            unique_id=str(file_record.get("uniqueId") or ""),
+            local_path=str(file_record.get("localPath") or ""),
+            expected_size=_int_or_default(file_record.get("size"), 0),
+            downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
         )
 
     return file_record
@@ -203,11 +258,18 @@ async def file_cancel_download_route(
                 file_id=file_id,
                 unique_id=str(result.get("uniqueId") or unique_id),
                 status_payload=result,
+                allow_completed_reset=True,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     session_id = _session_id_from_request(request)
+    _cancel_download_job(
+        db,
+        telegram_id=telegramId,
+        file_id=file_id,
+        unique_id=str(result.get("uniqueId") or payload.get("uniqueId") or ""),
+    )
     _stop_tdlib_download_monitor(
         session_id=session_id,
         telegram_id=telegramId,
@@ -354,11 +416,18 @@ async def file_remove_route(
                 file_id=file_id,
                 unique_id=str(result.get("uniqueId") or unique_id),
                 status_payload=result,
+                allow_completed_reset=True,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     session_id = _session_id_from_request(request)
+    _cancel_download_job(
+        db,
+        telegram_id=telegramId,
+        file_id=file_id,
+        unique_id=str(result.get("uniqueId") or unique_id),
+    )
     _stop_tdlib_download_monitor(
         session_id=session_id,
         telegram_id=telegramId,
@@ -516,6 +585,22 @@ async def files_start_download_multiple(
                 root_path_cache,
             )
             if root_path is not None:
+                _upsert_download_job(
+                    db,
+                    telegram_id=item["telegramId"],
+                    chat_id=item["chatId"],
+                    message_id=item["messageId"],
+                    file_id=item["fileId"],
+                    session_id=session_id,
+                    source="manual",
+                )
+                _mark_download_job_starting(
+                    db,
+                    telegram_id=item["telegramId"],
+                    chat_id=item["chatId"],
+                    message_id=item["messageId"],
+                    file_id=item["fileId"],
+                )
                 try:
                     file_record = await asyncio.to_thread(
                         _start_tdlib_download_for_message,
@@ -531,6 +616,14 @@ async def files_start_download_multiple(
                     _db_upsert_tdlib_file_record(db, file_payload=file_record)
                 except Exception as exc:
                     tdlib_start_error = True
+                    _mark_download_job_failed(
+                        db,
+                        telegram_id=item["telegramId"],
+                        chat_id=item["chatId"],
+                        message_id=item["messageId"],
+                        file_id=item["fileId"],
+                        error=str(exc),
+                    )
                     logger.warning(
                         "TDLib batch start failed telegram=%s chat=%s message=%s file=%s: %s",
                         item["telegramId"],
@@ -575,12 +668,35 @@ async def files_start_download_multiple(
             started_via_tdlib
             and str(file_record.get("downloadStatus") or "").strip() == "downloading"
         ):
+            _mark_download_job_monitoring(
+                db,
+                telegram_id=item["telegramId"],
+                chat_id=item["chatId"],
+                message_id=item["messageId"],
+                file_id=item["fileId"],
+                unique_id=str(file_record.get("uniqueId") or ""),
+                expected_size=_int_or_default(file_record.get("size"), 0),
+                downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
+            )
             _ensure_tdlib_download_monitor(
                 request.app,
                 session_id=session_id,
                 telegram_id=item["telegramId"],
                 file_id=_int_or_default(file_record.get("id"), item["fileId"]),
                 unique_id=str(file_record.get("uniqueId") or ""),
+            )
+        elif (
+            started_via_tdlib
+            and str(file_record.get("downloadStatus") or "").strip() == "completed"
+        ):
+            _complete_download_job_for_file(
+                db,
+                telegram_id=item["telegramId"],
+                file_id=_int_or_default(file_record.get("id"), item["fileId"]),
+                unique_id=str(file_record.get("uniqueId") or ""),
+                local_path=str(file_record.get("localPath") or ""),
+                expected_size=_int_or_default(file_record.get("size"), 0),
+                downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
             )
 
     if processed == 0 and failed > 0:
@@ -646,6 +762,7 @@ async def files_cancel_download_multiple(
                             file_id=item["fileId"],
                             unique_id=str(result.get("uniqueId") or item["uniqueId"]),
                             status_payload=result,
+                            allow_completed_reset=True,
                         )
                         used_tdlib = True
                     except Exception:
@@ -656,6 +773,12 @@ async def files_cancel_download_multiple(
                 continue
 
         processed += 1
+        _cancel_download_job(
+            db,
+            telegram_id=item["telegramId"],
+            file_id=item["fileId"],
+            unique_id=str(result.get("uniqueId") or item["uniqueId"]),
+        )
         if used_tdlib:
             _stop_tdlib_download_monitor(
                 session_id=session_id,
@@ -831,6 +954,7 @@ async def files_remove_multiple(
                             file_id=item["fileId"],
                             unique_id=str(result.get("uniqueId") or item["uniqueId"]),
                             status_payload=result,
+                            allow_completed_reset=True,
                         )
                         used_tdlib = True
                     except Exception:
@@ -841,6 +965,12 @@ async def files_remove_multiple(
                 continue
 
         processed += 1
+        _cancel_download_job(
+            db,
+            telegram_id=item["telegramId"],
+            file_id=item["fileId"],
+            unique_id=str(result.get("uniqueId") or item["uniqueId"]),
+        )
         if used_tdlib:
             _stop_tdlib_download_monitor(
                 session_id=session_id,

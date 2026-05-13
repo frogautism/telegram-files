@@ -2,7 +2,11 @@ import sqlite3
 import unittest
 
 from app.db import init_schema, list_files
-from app.file_record_ops import update_transfer_status, upsert_tdlib_file_record
+from app.file_record_ops import (
+    update_tdlib_file_status,
+    update_transfer_status,
+    upsert_tdlib_file_record,
+)
 
 
 class FileRecordOpsTest(unittest.TestCase):
@@ -193,6 +197,93 @@ class FileRecordOpsTest(unittest.TestCase):
         ).fetchone()
         self.assertEqual(row["transfer_status"], "completed")
         self.assertEqual(row["local_path"], "D:/archive/source.jpg")
+
+    def test_tdlib_idle_update_does_not_clear_completed_local_file(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_schema(conn)
+        upsert_tdlib_file_record(
+            conn,
+            file_payload=self._base_payload(
+                uniqueId="completed-file",
+                id=321,
+                messageId=321,
+                downloadStatus="completed",
+                downloadedSize=1234,
+                completionDate=1710000100000,
+                localPath="D:/downloads/completed.jpg",
+            ),
+        )
+
+        update_tdlib_file_status(
+            conn,
+            telegram_id=1,
+            file_id=321,
+            unique_id="completed-file",
+            status_payload={
+                "downloadStatus": "idle",
+                "downloadedSize": 0,
+                "localPath": "",
+                "completionDate": 0,
+            },
+        )
+
+        row = conn.execute(
+            """
+            SELECT download_status, downloaded_size, local_path, completion_date
+            FROM file_record
+            WHERE telegram_id = ? AND id = ? AND unique_id = ?
+            """,
+            (1, 321, "completed-file"),
+        ).fetchone()
+        self.assertEqual(row["download_status"], "completed")
+        self.assertEqual(row["downloaded_size"], 1234)
+        self.assertEqual(row["local_path"], "D:/downloads/completed.jpg")
+        self.assertEqual(row["completion_date"], 1710000100000)
+
+    def test_tdlib_completed_reset_can_clear_completed_local_file(self) -> None:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_schema(conn)
+        upsert_tdlib_file_record(
+            conn,
+            file_payload=self._base_payload(
+                uniqueId="completed-file",
+                id=321,
+                messageId=321,
+                downloadStatus="completed",
+                downloadedSize=1234,
+                completionDate=1710000100000,
+                localPath="D:/downloads/completed.jpg",
+            ),
+        )
+
+        update_tdlib_file_status(
+            conn,
+            telegram_id=1,
+            file_id=321,
+            unique_id="completed-file",
+            status_payload={
+                "downloadStatus": "idle",
+                "downloadedSize": 0,
+                "localPath": "",
+                "completionDate": 0,
+            },
+            allow_completed_reset=True,
+        )
+
+        row = conn.execute(
+            """
+            SELECT download_status, downloaded_size, local_path, completion_date
+            FROM file_record
+            WHERE telegram_id = ? AND id = ? AND unique_id = ?
+            """,
+            (1, 321, "completed-file"),
+        ).fetchone()
+        self.assertEqual(row["download_status"], "idle")
+        self.assertEqual(row["downloaded_size"], 0)
+        self.assertEqual(row["local_path"], "")
+        self.assertIsNone(row["completion_date"])
 
 
 if __name__ == "__main__":

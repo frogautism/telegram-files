@@ -493,6 +493,7 @@ def update_tdlib_file_status(
     unique_id: str,
     status_payload: dict[str, Any],
     on_completed: Callable[[sqlite3.Connection, int, int, str], None] | None = None,
+    allow_completed_reset: bool = False,
 ) -> None:
     target = None
     normalized_unique = unique_id.strip()
@@ -527,6 +528,16 @@ def update_tdlib_file_status(
     local_path = str(status_payload.get("localPath") or "")
     completion_date = _int_or_default(status_payload.get("completionDate"), 0)
     completion_value: int | None = completion_date if completion_date > 0 else None
+    existing_download_status = str(target["download_status"] or "").strip().lower()
+    existing_local_path = str(target["local_path"] or "").strip()
+    incoming_download_status = download_status.strip().lower()
+    if (
+        existing_download_status == "completed"
+        and existing_local_path
+        and incoming_download_status != "completed"
+        and not allow_completed_reset
+    ):
+        return
 
     db.execute(
         """
@@ -534,7 +545,8 @@ def update_tdlib_file_status(
         SET downloaded_size = ?,
             download_status = ?,
             local_path = ?,
-            completion_date = ?
+            completion_date = ?,
+            download_error = CASE WHEN ? = 'error' THEN download_error ELSE '' END
         WHERE telegram_id = ? AND id = ? AND unique_id = ?
         """,
         (
@@ -542,6 +554,7 @@ def update_tdlib_file_status(
             download_status,
             local_path,
             completion_value,
+            download_status.strip().lower(),
             telegram_id,
             _int_or_default(target["id"], 0),
             resolved_unique,

@@ -10,6 +10,10 @@ from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI
 
+from .download_jobs import (
+    complete_download_job_for_file as _complete_download_job_for_file,
+    record_download_job_progress as _record_download_job_progress,
+)
 from .tdlib import TdlibAuthManager
 from .tdlib_downloads import (
     cache_tdlib_file_preview as _cache_tdlib_file_preview,
@@ -233,6 +237,15 @@ async def _monitor_tdlib_download(
                 downloaded_size,
                 now_ms,
             )
+            _record_download_job_progress(
+                db,
+                telegram_id=telegram_id,
+                file_id=file_id,
+                unique_id=resolved_unique_id,
+                downloaded_size=downloaded_size,
+                expected_size=total_size,
+                local_path=str(status_payload.get("localPath") or ""),
+            )
 
             await deps.emit_file_update(session_id, {"file": ws_file})
 
@@ -258,6 +271,15 @@ async def _monitor_tdlib_download(
             )
 
             if status == "completed":
+                _complete_download_job_for_file(
+                    db,
+                    telegram_id=telegram_id,
+                    file_id=file_id,
+                    unique_id=resolved_unique_id,
+                    local_path=str(status_payload.get("localPath") or ""),
+                    expected_size=total_size,
+                    downloaded_size=downloaded_size,
+                )
                 break
 
             if status == "downloading" or downloaded_size > 0:

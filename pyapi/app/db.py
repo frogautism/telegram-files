@@ -76,6 +76,8 @@ def init_schema(conn: sqlite3.Connection) -> None:
             local_path            VARCHAR(1024),
             download_status       VARCHAR(255),
             transfer_status       VARCHAR(255),
+            download_error        TEXT,
+            verification_status   VARCHAR(255),
             start_date            BIGINT,
             completion_date       BIGINT,
             tags                  VARCHAR(2056),
@@ -91,6 +93,33 @@ def init_schema(conn: sqlite3.Connection) -> None:
             type       VARCHAR(255),
             timestamp  BIGINT,
             data       TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS download_job
+        (
+            id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+            telegram_id                BIGINT NOT NULL,
+            chat_id                    BIGINT NOT NULL,
+            message_id                 BIGINT NOT NULL,
+            file_id                    BIGINT NOT NULL,
+            unique_id                  VARCHAR(255),
+            session_id                 VARCHAR(255),
+            source                     VARCHAR(255) NOT NULL,
+            state                      VARCHAR(255) NOT NULL,
+            attempts                   INT NOT NULL DEFAULT 0,
+            retry_at                   BIGINT,
+            next_retry_delay_seconds   INT NOT NULL DEFAULT 5,
+            error                      TEXT,
+            expected_size              BIGINT NOT NULL DEFAULT 0,
+            downloaded_size            BIGINT NOT NULL DEFAULT 0,
+            local_path                 VARCHAR(1024),
+            verification_status        VARCHAR(255),
+            last_progress_at           BIGINT,
+            last_restart_at            BIGINT,
+            created_at                 BIGINT NOT NULL,
+            updated_at                 BIGINT NOT NULL,
+            started_at                 BIGINT,
+            completed_at               BIGINT
         );
 
         CREATE INDEX IF NOT EXISTS idx_file_record_chat
@@ -124,9 +153,35 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_chat_group_record_telegram
             ON chat_group_record (telegram_id, created_at DESC);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_download_job_identity
+            ON download_job (telegram_id, chat_id, message_id, file_id);
+
+        CREATE INDEX IF NOT EXISTS idx_download_job_state_retry
+            ON download_job (state, retry_at, updated_at);
+
+        CREATE INDEX IF NOT EXISTS idx_download_job_file
+            ON download_job (telegram_id, file_id, unique_id);
         """
     )
+    _ensure_column(conn, "file_record", "download_error", "TEXT")
+    _ensure_column(conn, "file_record", "verification_status", "VARCHAR(255)")
     conn.commit()
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_type: str,
+) -> None:
+    columns = {
+        str(row["name"])
+        for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name in columns:
+        return
+    conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
 
 
 def upsert_settings(conn: sqlite3.Connection, values: dict[str, str]) -> None:
@@ -253,6 +308,8 @@ def _serialize_file_row(
         "completionDate": _safe_int(completion_date),
         "originalDeleted": False,
         "transferStatus": str(row["transfer_status"] or "idle"),
+        "downloadError": str(row["download_error"] or ""),
+        "verificationStatus": str(row["verification_status"] or ""),
         "extra": _parse_extra(row["extra"]),
         "tags": row["tags"],
         "alreadyDownloaded": (
@@ -638,6 +695,8 @@ def _row_to_file_status_payload(
         "completionDate": _safe_int(row["completion_date"]),
         "downloadedSize": _safe_int(row["downloaded_size"]),
         "transferStatus": str(row["transfer_status"] or "idle"),
+        "downloadError": str(row["download_error"] or ""),
+        "verificationStatus": str(row["verification_status"] or ""),
         "removed": removed,
     }
 

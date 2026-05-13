@@ -20,6 +20,17 @@ from .db import (
     update_auto_settings,
     update_chat_group_auto_settings,
 )
+from .download_jobs import (
+    complete_download_job_for_file as _complete_download_job_for_file,
+    due_download_jobs as _due_download_jobs,
+    mark_download_job_failed as _mark_download_job_failed,
+    mark_download_job_monitoring as _mark_download_job_monitoring,
+    mark_download_job_restarted as _mark_download_job_restarted,
+    mark_download_job_starting as _mark_download_job_starting,
+    recover_interrupted_download_jobs as _recover_interrupted_download_jobs,
+    stale_monitoring_jobs as _stale_monitoring_jobs,
+    upsert_download_job as _upsert_download_job,
+)
 from .file_record_ops import (
     count_downloading_files as _db_count_downloading_files,
     file_for_transfer as _db_file_for_transfer,
@@ -54,6 +65,8 @@ AUTO_DOWNLOAD_TICK_INTERVAL_SECONDS = 10
 TRANSFER_SCAN_INTERVAL_SECONDS = 120
 TRANSFER_TICK_INTERVAL_SECONDS = 3
 AUTO_DOWNLOAD_MAX_WAITING_LENGTH = 30
+STUCK_DOWNLOAD_SCAN_INTERVAL_SECONDS = 60
+STUCK_DOWNLOAD_TIMEOUT_SECONDS = 15 * 60
 
 AUTO_DOWNLOAD_WAITING: dict[int, deque[dict[str, int]]] = {}
 AUTO_DOWNLOAD_WAITING_KEYS: set[tuple[int, int, int]] = set()
@@ -405,6 +418,18 @@ def _auto_waiting_size(telegram_id: int) -> int:
     return len(queue)
 
 
+def _queue_due_download_jobs(db: sqlite3.Connection) -> None:
+    for job in _due_download_jobs(db, limit=200):
+        _queue_auto_download_candidate(
+            {
+                "telegramId": _int_or_default(job.get("telegramId"), 0),
+                "chatId": _int_or_default(job.get("chatId"), 0),
+                "messageId": _int_or_default(job.get("messageId"), 0),
+                "fileId": _int_or_default(job.get("fileId"), 0),
+            }
+        )
+
+
 def _queue_comment_thread_scan(
     *,
     telegram_id: int,
@@ -647,6 +672,15 @@ async def _scan_auto_download_scope(
                         continue
 
             _db_upsert_tdlib_file_record(db, file_payload=file_payload)
+            _upsert_download_job(
+                db,
+                telegram_id=telegram_id,
+                chat_id=_int_or_default(file_payload.get("chatId"), chat_id),
+                message_id=_int_or_default(file_payload.get("messageId"), 0),
+                file_id=_int_or_default(file_payload.get("id"), 0),
+                unique_id=unique_id,
+                source="auto",
+            )
             _queue_auto_download_candidate(
                 {
                     "telegramId": telegram_id,
@@ -1096,6 +1130,7 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
         return
 
     td_manager = _tdlib_manager_from_app(app)
+    _queue_due_download_jobs(db)
     if td_manager is None or not AUTO_DOWNLOAD_WAITING:
         return
 
@@ -1118,17 +1153,36 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
             if candidate is None:
                 break
 
+            candidate_chat_id = _int_or_default(candidate.get("chatId"), 0)
+            candidate_message_id = _int_or_default(candidate.get("messageId"), 0)
+            candidate_file_id = _int_or_default(candidate.get("fileId"), 0)
+            _mark_download_job_starting(
+                db,
+                telegram_id=telegram_id,
+                chat_id=candidate_chat_id,
+                message_id=candidate_message_id,
+                file_id=candidate_file_id,
+            )
             try:
                 file_record = await asyncio.to_thread(
                     _start_tdlib_download_for_message,
                     td_manager,
+                    db=db,
                     telegram_id=telegram_id,
                     root_path=root_path,
-                    chat_id=_int_or_default(candidate.get("chatId"), 0),
-                    message_id=_int_or_default(candidate.get("messageId"), 0),
-                    file_id=_int_or_default(candidate.get("fileId"), 0),
+                    chat_id=candidate_chat_id,
+                    message_id=candidate_message_id,
+                    file_id=candidate_file_id,
                 )
             except Exception as exc:
+                _mark_download_job_failed(
+                    db,
+                    telegram_id=telegram_id,
+                    chat_id=candidate_chat_id,
+                    message_id=candidate_message_id,
+                    file_id=candidate_file_id,
+                    error=str(exc),
+                )
                 logger.warning(
                     "Auto-download start failed for telegram=%s candidate=%s: %s",
                     telegram_id,
@@ -1140,7 +1194,6 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
             _db_upsert_tdlib_file_record(db, file_payload=file_record)
             await deps.emit_file_status(deps.td_file_status_payload(file_record))
 
-            candidate_chat_id = _int_or_default(candidate.get("chatId"), 0)
             automation = _resolve_effective_automation_for_chat(
                 telegram_id=telegram_id,
                 chat_id=candidate_chat_id,
@@ -1170,7 +1223,28 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
                     )
 
             monitor_file_id = _int_or_default(file_record.get("id"), 0)
-            if monitor_file_id > 0:
+            download_status = str(file_record.get("downloadStatus") or "").strip().lower()
+            if download_status == "completed":
+                _complete_download_job_for_file(
+                    db,
+                    telegram_id=telegram_id,
+                    file_id=monitor_file_id,
+                    unique_id=str(file_record.get("uniqueId") or ""),
+                    local_path=str(file_record.get("localPath") or ""),
+                    expected_size=_int_or_default(file_record.get("size"), 0),
+                    downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
+                )
+            if monitor_file_id > 0 and download_status == "downloading":
+                _mark_download_job_monitoring(
+                    db,
+                    telegram_id=telegram_id,
+                    chat_id=candidate_chat_id,
+                    message_id=candidate_message_id,
+                    file_id=candidate_file_id,
+                    unique_id=str(file_record.get("uniqueId") or ""),
+                    expected_size=_int_or_default(file_record.get("size"), 0),
+                    downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
+                )
                 deps.ensure_tdlib_download_monitor(
                     app,
                     f"worker:{telegram_id}",
@@ -1354,6 +1428,72 @@ async def _run_transfer_tick(deps: WorkerDeps, app: FastAPI) -> None:
         await deps.emit_file_status(final_payload)
 
 
+async def _run_stuck_download_check(app: FastAPI, deps: WorkerDeps) -> None:
+    db: sqlite3.Connection = app.state.db
+    td_manager = _tdlib_manager_from_app(app)
+    if td_manager is None:
+        return
+
+    stale_jobs = _stale_monitoring_jobs(
+        db,
+        stale_after_ms=STUCK_DOWNLOAD_TIMEOUT_SECONDS * 1000,
+        limit=50,
+    )
+    if not stale_jobs:
+        return
+
+    root_path_cache: dict[int, str | None] = {}
+    for job in stale_jobs:
+        telegram_id = _int_or_default(job.get("telegramId"), 0)
+        file_id = _int_or_default(job.get("fileId"), 0)
+        if telegram_id <= 0 or file_id <= 0:
+            continue
+
+        root_path = deps.tdlib_account_root_path(
+            app,
+            db,
+            telegram_id,
+            root_path_cache,
+        )
+        if root_path is None:
+            continue
+        if not _load_tdlib_session_for_account(td_manager, telegram_id, root_path):
+            continue
+
+        result = await asyncio.to_thread(
+            td_manager.request,
+            str(telegram_id),
+            {
+                "@type": "downloadFile",
+                "file_id": file_id,
+                "priority": 16,
+                "offset": 0,
+                "limit": 0,
+                "synchronous": False,
+            },
+            20.0,
+        )
+        if str(result.get("@type") or "") == "error":
+            _mark_download_job_failed(
+                db,
+                telegram_id=telegram_id,
+                chat_id=_int_or_default(job.get("chatId"), 0),
+                message_id=_int_or_default(job.get("messageId"), 0),
+                file_id=file_id,
+                error=str(result.get("message") or "Stuck download restart failed"),
+            )
+            continue
+
+        _mark_download_job_restarted(
+            db,
+            telegram_id=telegram_id,
+            chat_id=_int_or_default(job.get("chatId"), 0),
+            message_id=_int_or_default(job.get("messageId"), 0),
+            file_id=file_id,
+            error="Download stalled; restart requested",
+        )
+
+
 async def background_workers_loop(app: FastAPI, deps: WorkerDeps) -> None:
     last_preload = 0.0
     last_auto_scan = 0.0
@@ -1361,6 +1501,8 @@ async def background_workers_loop(app: FastAPI, deps: WorkerDeps) -> None:
     last_transfer_scan = 0.0
     last_transfer_tick = 0.0
     last_speed_persist = 0.0
+    last_stuck_scan = 0.0
+    _recover_interrupted_download_jobs(app.state.db)
 
     while True:
         now = time.monotonic()
@@ -1385,6 +1527,10 @@ async def background_workers_loop(app: FastAPI, deps: WorkerDeps) -> None:
             if now - last_transfer_tick >= TRANSFER_TICK_INTERVAL_SECONDS:
                 last_transfer_tick = now
                 await _run_transfer_tick(deps, app)
+
+            if now - last_stuck_scan >= STUCK_DOWNLOAD_SCAN_INTERVAL_SECONDS:
+                last_stuck_scan = now
+                await _run_stuck_download_check(app, deps)
 
             db: sqlite3.Connection = app.state.db
             speed_interval_seconds = float(deps.avg_speed_interval(db))

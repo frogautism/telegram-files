@@ -12,6 +12,8 @@ from fastapi import FastAPI
 from app.automation_workers import (
     TRANSFER_WAITING,
     WorkerDeps,
+    _queue_auto_download_candidate,
+    _run_auto_download_tick,
     _run_transfer_scan_cycle,
     _run_transfer_tick,
     reset_worker_state,
@@ -28,6 +30,55 @@ from app.db import (
 from app.download_runtime import _queue_transfer_for_completed_file
 from app.file_record_ops import file_for_transfer, upsert_tdlib_file_record
 from app.transfer_ops import execute_transfer
+
+
+class _DuplicateTdlibManager:
+    def __init__(self) -> None:
+        self.requests: list[str] = []
+
+    def request(self, account_key: str, payload: dict, timeout_seconds: float):
+        del account_key, timeout_seconds
+        request_type = str(payload.get("@type") or "")
+        self.requests.append(request_type)
+        if request_type == "getMessage":
+            return {
+                "@type": "message",
+                "id": 200,
+                "chat_id": 100,
+                "date": 1710000000,
+                "message_thread_id": 0,
+                "media_album_id": 0,
+                "content": {
+                    "@type": "messageDocument",
+                    "caption": {"text": "duplicate file"},
+                    "document": {
+                        "file_name": "duplicate.bin",
+                        "mime_type": "application/octet-stream",
+                        "document": {
+                            "id": 321,
+                            "size": 1234,
+                            "expected_size": 1234,
+                            "local": {
+                                "is_downloading_completed": False,
+                                "is_downloading_active": False,
+                                "downloaded_size": 0,
+                                "path": "",
+                            },
+                            "remote": {
+                                "id": "remote-321",
+                                "unique_id": "dup-photo-1",
+                            },
+                        },
+                    },
+                },
+            }
+        if request_type == "getMessageThread":
+            return {
+                "@type": "messageThreadInfo",
+                "chat_id": 100,
+                "message_thread_id": 0,
+            }
+        raise AssertionError(f"Unexpected TDLib request: {request_type}")
 
 
 class _FakeResponse:
@@ -439,6 +490,101 @@ class TransferOpsTest(unittest.TestCase):
             self.assertEqual(queued["chatId"], 100)
             self.assertEqual(queued["fileId"], 222)
             self.assertEqual(queued["uniqueId"], "album-second")
+
+    def test_auto_download_tick_reuses_completed_duplicate_without_monitor(
+        self,
+    ) -> None:
+        conn = sqlite3.connect(":memory:", check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        init_schema(conn)
+        upsert_tdlib_file_record(
+            conn,
+            file_payload={
+                "id": 111,
+                "telegramId": 1,
+                "uniqueId": "dup-photo-1",
+                "messageId": 50,
+                "chatId": 100,
+                "mediaAlbumId": 0,
+                "fileName": "existing.bin",
+                "type": "file",
+                "mimeType": "application/octet-stream",
+                "size": 1234,
+                "downloadedSize": 1234,
+                "thumbnail": "",
+                "downloadStatus": "completed",
+                "date": 1710000000,
+                "caption": "existing",
+                "localPath": "D:/downloads/existing.bin",
+                "hasSensitiveContent": False,
+                "startDate": 0,
+                "completionDate": 1710000100000,
+                "transferStatus": "idle",
+                "extra": {"width": 640, "height": 480, "type": "x"},
+                "threadChatId": 0,
+                "messageThreadId": 0,
+                "reactionCount": 0,
+            },
+        )
+        _queue_auto_download_candidate(
+            {
+                "telegramId": 1,
+                "chatId": 100,
+                "messageId": 200,
+                "fileId": 321,
+            }
+        )
+
+        emitted: list[dict[str, object]] = []
+        monitor_calls: list[tuple[object, ...]] = []
+
+        async def _emit_file_status(payload: dict[str, object]) -> None:
+            emitted.append(payload)
+
+        deps = WorkerDeps(
+            tdlib_account_root_path=lambda *_args, **_kwargs: "D:/tdlib/account-1",
+            emit_file_status=_emit_file_status,
+            td_file_status_payload=lambda payload: payload,
+            ensure_tdlib_download_monitor=lambda *args: monitor_calls.append(args),
+            avg_speed_interval=lambda _db: 0,
+            persist_speed_statistics=lambda _db: None,
+        )
+        app = FastAPI()
+        app.state.db = conn
+        td_manager = _DuplicateTdlibManager()
+
+        with (
+            patch(
+                "app.automation_workers._tdlib_manager_from_app",
+                return_value=td_manager,
+            ),
+            patch(
+                "app.tdlib_downloads._load_tdlib_session_for_account",
+                return_value=True,
+            ),
+        ):
+            asyncio.run(_run_auto_download_tick(app, deps))
+
+        self.assertEqual(td_manager.requests, ["getMessage", "getMessageThread"])
+        self.assertEqual(monitor_calls, [])
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["downloadStatus"], "completed")
+        self.assertEqual(emitted[0]["localPath"], "D:/downloads/existing.bin")
+
+        rows = conn.execute(
+            """
+            SELECT download_status, local_path
+            FROM file_record
+            WHERE telegram_id = ? AND unique_id = ?
+            ORDER BY message_id
+            """,
+            (1, "dup-photo-1"),
+        ).fetchall()
+        self.assertTrue(rows)
+        self.assertEqual(
+            [(row["download_status"], row["local_path"]) for row in rows],
+            [("completed", "D:/downloads/existing.bin")] * len(rows),
+        )
 
     def test_auto_transfer_presets_are_account_scoped_and_normalized(self) -> None:
         conn = sqlite3.connect(":memory:")

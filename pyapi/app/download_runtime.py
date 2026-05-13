@@ -348,6 +348,7 @@ def _db_update_tdlib_file_status(
     file_id: int,
     unique_id: str,
     status_payload: dict[str, Any],
+    allow_completed_reset: bool = False,
 ) -> None:
     _update_tdlib_file_status(
         db,
@@ -355,6 +356,7 @@ def _db_update_tdlib_file_status(
         file_id=file_id,
         unique_id=unique_id,
         status_payload=status_payload,
+        allow_completed_reset=allow_completed_reset,
         on_completed=lambda db_conn, completed_telegram_id, completed_file_id, completed_unique_id: (
             _queue_transfer_for_completed_file(
                 db_conn,
