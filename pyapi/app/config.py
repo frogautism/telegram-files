@@ -55,6 +55,8 @@ class AppConfig:
     telegram_api_hash: str
     telegram_log_level: int
     tdlib_shared_lib: str
+    douyin_downloader_path: str
+    douyin_path: str
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -69,6 +71,8 @@ class AppConfig:
             telegram_api_hash=os.getenv("TELEGRAM_API_HASH", "").strip(),
             telegram_log_level=_int_from_env("TELEGRAM_LOG_LEVEL", 1),
             tdlib_shared_lib=os.getenv("TDLIB_SHARED_LIB", "").strip(),
+            douyin_downloader_path=os.getenv("DOUYIN_DOWNLOADER_PATH", "").strip(),
+            douyin_path=os.getenv("DOUYIN_PATH", "").strip(),
         )
         config.ensure_runtime_dirs()
         return config
@@ -81,3 +85,4 @@ class AppConfig:
         self.app_root.mkdir(parents=True, exist_ok=True)
         (self.app_root / "account").mkdir(parents=True, exist_ok=True)
         (self.app_root / "logs").mkdir(parents=True, exist_ok=True)
+        (self.app_root / "douyin").mkdir(parents=True, exist_ok=True)

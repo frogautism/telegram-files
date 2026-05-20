@@ -86,6 +86,12 @@ export function Header() {
           )}
 
           <ThemeToggleButton />
+          <Link
+            href="/douyin"
+            className="hidden h-8 items-center rounded-md px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:inline-flex"
+          >
+            Douyin
+          </Link>
           <SettingsDialog />
         </div>
       </div>

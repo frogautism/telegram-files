@@ -4,32 +4,44 @@ import { POST } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
 
 export function useFileControl(file: TelegramFile) {
+  const isDouyin = file.source === "douyin";
   const { trigger: startDownload, isMutating: starting } = useSWRMutation(
-    `/${file.telegramId}/file/start-download`,
+    isDouyin ? "/douyin/file/start-download" : `/${file.telegramId}/file/start-download`,
     (
-      key,
-      { arg }: { arg: { chatId: number; messageId: number; fileId: number } },
+      key: string,
+      {
+        arg,
+      }: {
+        arg: {
+          chatId: number;
+          messageId: number;
+          fileId: number;
+          uniqueId?: string;
+        };
+      },
     ) => POST(key, arg),
   );
   const { trigger: cancelDownload, isMutating: cancelling } = useSWRMutation(
-    `/${file.telegramId}/file/cancel-download`,
-    (key, { arg }: { arg: { fileId: number } }) => POST(key, arg),
+    isDouyin ? "/douyin/file/cancel-download" : `/${file.telegramId}/file/cancel-download`,
+    (key: string, { arg }: { arg: { fileId: number; uniqueId?: string } }) => POST(key, arg),
   );
   const { trigger: togglePauseDownload, isMutating: togglingPause } =
     useSWRMutation(
-      `/${file.telegramId}/file/toggle-pause-download`,
-      (key, { arg }: { arg: { fileId: number; isPaused: boolean } }) =>
+      isDouyin
+        ? "/douyin/file/toggle-pause-download"
+        : `/${file.telegramId}/file/toggle-pause-download`,
+      (key: string, { arg }: { arg: { fileId: number; uniqueId?: string; isPaused: boolean } }) =>
         POST(key, arg),
     );
   const { trigger: removeFile, isMutating: removing } = useSWRMutation(
-    `/${file.telegramId}/file/remove`,
-    (key, { arg }: { arg: { fileId: number; uniqueId: string } }) =>
+    isDouyin ? "/douyin/file/remove" : `/${file.telegramId}/file/remove`,
+    (key: string, { arg }: { arg: { fileId: number; uniqueId: string } }) =>
       POST(key, arg),
   );
 
   const downloadControl = {
     cancel: (fileId: number) => {
-      void cancelDownload({ fileId });
+      void cancelDownload({ fileId, uniqueId: file.uniqueId });
     },
     start: (fileId: number) => {
       if (file) {
@@ -47,6 +59,7 @@ export function useFileControl(file: TelegramFile) {
           chatId: file.chatId,
           fileId,
           messageId: file.messageId,
+          uniqueId: file.uniqueId,
         });
       }
     },
@@ -60,6 +73,7 @@ export function useFileControl(file: TelegramFile) {
         }
         void togglePauseDownload({
           fileId,
+          uniqueId: file.uniqueId,
           isPaused: file.downloadStatus === "downloading",
         });
       }

@@ -126,12 +126,19 @@ export function useFiles(
   chatId: string,
   messageThreadId?: number,
   link?: string,
+  source: "telegram" | "douyin" = "telegram",
+  sourceId?: string,
 ) {
   const noAccountSpecified = accountId === "-1" && chatId === "-1";
   const isGroupChat = isGroupChatId(chatId);
-  const url = noAccountSpecified
-    ? "/files"
-    : getFilesApiPath(accountId, chatId);
+  const url =
+    source === "douyin"
+      ? sourceId
+        ? `/douyin/sources/${sourceId}/files`
+        : "/douyin/files"
+      : noAccountSpecified
+        ? "/files"
+        : getFilesApiPath(accountId, chatId);
   const { lastJsonMessage } = useWebsocket();
   const [latestFilesStatus, setLatestFileStatus] = useState<
     Record<
@@ -255,6 +262,7 @@ export function useFiles(
       return;
     }
     const data = lastJsonMessage.data as {
+      source?: "telegram" | "douyin";
       fileId: number;
       uniqueId: string;
       downloadStatus: DownloadStatus;
@@ -265,6 +273,12 @@ export function useFiles(
       thumbnailFile?: Thumbnail;
       removed?: boolean;
     };
+    if (source === "douyin" && data.source && data.source !== "douyin") {
+      return;
+    }
+    if (source === "telegram" && data.source === "douyin") {
+      return;
+    }
 
     const visibleFileIds = getVisibleFileIdsForUniqueId(pages, data.uniqueId);
     const exactStatusKey = getFileStatusKey(data.fileId, data.uniqueId);
@@ -337,7 +351,7 @@ export function useFiles(
           }
         : {}),
     }));
-  }, [lastJsonMessage, pages]);
+  }, [lastJsonMessage, pages, source]);
 
   useEffect(() => {
     if (!accountId || !chatId) {

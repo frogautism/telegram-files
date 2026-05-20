@@ -162,6 +162,83 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_download_job_file
             ON download_job (telegram_id, file_id, unique_id);
+
+        CREATE TABLE IF NOT EXISTS douyin_source
+        (
+            id            VARCHAR(64) PRIMARY KEY,
+            url           TEXT        NOT NULL,
+            resolved_url  TEXT,
+            url_type      VARCHAR(64),
+            title         TEXT,
+            author_name   TEXT,
+            status        VARCHAR(64) NOT NULL DEFAULT 'idle',
+            auto_settings TEXT,
+            last_error    TEXT,
+            created_at    BIGINT      NOT NULL,
+            updated_at    BIGINT      NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS douyin_file
+        (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            unique_id             VARCHAR(255) NOT NULL UNIQUE,
+            source_id             VARCHAR(64)  NOT NULL,
+            aweme_id              VARCHAR(64)  NOT NULL,
+            asset_index           INT          NOT NULL DEFAULT 0,
+            asset_kind            VARCHAR(64)  NOT NULL DEFAULT 'primary',
+            file_name             TEXT,
+            type                  VARCHAR(32)  NOT NULL DEFAULT 'file',
+            mime_type             VARCHAR(255),
+            size                  BIGINT       NOT NULL DEFAULT 0,
+            downloaded_size       BIGINT       NOT NULL DEFAULT 0,
+            thumbnail_url         TEXT,
+            caption               TEXT,
+            extra                 TEXT,
+            local_path            TEXT,
+            download_status       VARCHAR(64)  NOT NULL DEFAULT 'idle',
+            transfer_status       VARCHAR(64)  NOT NULL DEFAULT 'idle',
+            download_error        TEXT,
+            verification_status   VARCHAR(255),
+            date                  INT          NOT NULL DEFAULT 0,
+            start_date            BIGINT       NOT NULL DEFAULT 0,
+            completion_date       BIGINT,
+            tags                  TEXT,
+            metadata_json         TEXT,
+            created_at            BIGINT       NOT NULL,
+            updated_at            BIGINT       NOT NULL,
+            FOREIGN KEY(source_id) REFERENCES douyin_source(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS douyin_job
+        (
+            id              VARCHAR(64) PRIMARY KEY,
+            source_id       VARCHAR(64),
+            file_unique_id  VARCHAR(255),
+            url             TEXT,
+            kind            VARCHAR(64) NOT NULL,
+            state           VARCHAR(64) NOT NULL,
+            total           INT NOT NULL DEFAULT 0,
+            success         INT NOT NULL DEFAULT 0,
+            failed          INT NOT NULL DEFAULT 0,
+            skipped         INT NOT NULL DEFAULT 0,
+            error           TEXT,
+            created_at      BIGINT NOT NULL,
+            updated_at      BIGINT NOT NULL,
+            started_at      BIGINT,
+            completed_at    BIGINT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_douyin_file_source
+            ON douyin_file (source_id, date DESC, id DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_douyin_file_status
+            ON douyin_file (download_status, type);
+
+        CREATE INDEX IF NOT EXISTS idx_douyin_file_transfer
+            ON douyin_file (download_status, transfer_status, completion_date DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_douyin_job_state
+            ON douyin_job (state, updated_at);
         """
     )
     _ensure_column(conn, "file_record", "download_error", "TEXT")

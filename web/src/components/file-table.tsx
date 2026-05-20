@@ -45,6 +45,8 @@ interface FileTableProps {
   chatId: string;
   messageThreadId?: number;
   link?: string;
+  source?: "telegram" | "douyin";
+  sourceId?: string;
 }
 
 type Density = "compact" | "comfortable" | "detail";
@@ -56,10 +58,19 @@ export function FileTable({
   chatId,
   messageThreadId,
   link,
+  source = "telegram",
+  sourceId,
 }: FileTableProps) {
   const [selectedFiles, setSelectedFiles] = useState<Set<number>>(new Set());
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const useFilesProps = useFiles(accountId, chatId, messageThreadId, link);
+  const useFilesProps = useFiles(
+    accountId,
+    chatId,
+    messageThreadId,
+    link,
+    source,
+    sourceId,
+  );
   const {
     filters,
     updateField,
@@ -177,6 +188,8 @@ export function FileTable({
 
   const titleLabel = link
     ? "Linked board"
+    : source === "douyin"
+      ? "Douyin"
     : messageThreadId
       ? "Thread"
       : filters.type === "media"

@@ -43,9 +43,11 @@ function useBatchUpdateTags({
   }, [files]);
 
   const { trigger, isMutating } = useSWRMutation(
-    "/files/update-tags",
+    files.some((file) => file.source === "douyin")
+      ? "/douyin/files/update-tags"
+      : "/files/update-tags",
     (
-      key,
+      key: string,
       {
         arg,
       }: {
@@ -112,8 +114,10 @@ function useUpdateTags({
   }, [file?.tags]);
 
   const { trigger, isMutating } = useSWRMutation(
-    `/file/${file.uniqueId}/update-tags`,
-    (key, { arg }: { arg: { tags: string } }) => POST(key, arg),
+    file.source === "douyin"
+      ? `/douyin/file/${file.uniqueId}/update-tags`
+      : `/file/${file.uniqueId}/update-tags`,
+    (key: string, { arg }: { arg: { tags: string } }) => POST(key, arg),
     {
       onSuccess: () => {
         onTagsUpdate?.(tags);

@@ -20,10 +20,25 @@ interface FileListProps {
   accountId: string;
   chatId: string;
   link?: string;
+  source?: "telegram" | "douyin";
+  sourceId?: string;
 }
 
-export default function FileList({ accountId, chatId, link }: FileListProps) {
-  const useFilesProps = useFiles(accountId, chatId, undefined, link);
+export default function FileList({
+  accountId,
+  chatId,
+  link,
+  source = "telegram",
+  sourceId,
+}: FileListProps) {
+  const useFilesProps = useFiles(
+    accountId,
+    chatId,
+    undefined,
+    link,
+    source,
+    sourceId,
+  );
   const [currentViewFile, setCurrentViewFile] = useState<
     TelegramFile | undefined
   >();

@@ -21,6 +21,7 @@ import { TagsInput } from "@/components/ui/tags-input";
 import { Input } from "@/components/ui/input";
 import { split } from "lodash";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
+import { Textarea } from "@/components/ui/textarea";
 import useSWRMutation from "swr/mutation";
 import { POST } from "@/lib/api";
 import { safeJsonParse } from "@/lib/utils";
@@ -483,6 +484,110 @@ export default function SettingsForm() {
                 />
               </label>
             </RadioGroup>
+          </div>
+        </SettingsSection>
+        <SettingsSection title="Douyin">
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="douyin-path">Output path</Label>
+                <Input
+                  id="douyin-path"
+                  value={settings?.douyinPath ?? ""}
+                  placeholder="Defaults to APP_ROOT/douyin"
+                  onChange={(event) =>
+                    void setSetting("douyinPath", event.target.value)
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="douyin-proxy">Proxy</Label>
+                <Input
+                  id="douyin-proxy"
+                  value={settings?.douyinProxy ?? ""}
+                  placeholder="http://127.0.0.1:7890"
+                  onChange={(event) =>
+                    void setSetting("douyinProxy", event.target.value)
+                  }
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="douyin-cookies">Cookies</Label>
+              <Textarea
+                id="douyin-cookies"
+                rows={4}
+                value={settings?.douyinCookies ?? ""}
+                placeholder="Paste a Douyin Cookie header or JSON object"
+                onChange={(event) =>
+                  void setSetting("douyinCookies", event.target.value)
+                }
+              />
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="douyin-thread">Concurrency</Label>
+                <Input
+                  id="douyin-thread"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={settings?.douyinThread ?? "3"}
+                  onChange={(event) =>
+                    void setSetting("douyinThread", event.target.value)
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="douyin-retry">Retry count</Label>
+                <Input
+                  id="douyin-retry"
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={settings?.douyinRetryTimes ?? "3"}
+                  onChange={(event) =>
+                    void setSetting("douyinRetryTimes", event.target.value)
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="douyin-preload">Preload limit</Label>
+                <Input
+                  id="douyin-preload"
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={settings?.douyinPreloadLimit ?? "50"}
+                  onChange={(event) =>
+                    void setSetting("douyinPreloadLimit", event.target.value)
+                  }
+                />
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2">
+              {[
+                ["douyinCover", "Download covers"],
+                ["douyinMusic", "Download music"],
+                ["douyinAvatar", "Download avatars"],
+                ["douyinJson", "Save metadata JSON"],
+                ["douyinComments", "Save comments"],
+                ["douyinBrowserFallback", "Browser fallback"],
+              ].map(([key, label]) => (
+                <label
+                  key={key}
+                  className="flex items-center justify-between rounded-md border border-border p-3"
+                >
+                  <span className="text-sm">{label}</span>
+                  <Switch
+                    checked={String(settings?.[key as SettingKey]) === "true"}
+                    onCheckedChange={(checked) =>
+                      void setSetting(key as SettingKey, String(checked))
+                    }
+                  />
+                </label>
+              ))}
+            </div>
           </div>
         </SettingsSection>
         <div

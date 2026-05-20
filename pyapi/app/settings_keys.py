@@ -12,6 +12,20 @@ DEFAULT_SETTINGS: dict[str, object | None] = {
     "speedUnits": "bits",
     "tags": None,
     "offlineResetPinEnabled": False,
+    "douyinCookies": None,
+    "douyinProxy": None,
+    "douyinPath": None,
+    "douyinThread": 3,
+    "douyinRetryTimes": 3,
+    "douyinRateLimit": 2,
+    "douyinPreloadLimit": 50,
+    "douyinCover": True,
+    "douyinMusic": True,
+    "douyinAvatar": False,
+    "douyinJson": True,
+    "douyinComments": False,
+    "douyinBrowserFallback": True,
+    "douyinBrowserHeadless": True,
 }
 
 

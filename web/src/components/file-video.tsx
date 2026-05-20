@@ -336,7 +336,10 @@ const FileVideo = ({
   const [error, setError] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  const url = `${getApiUrl()}/${file.telegramId}/file/${file.uniqueId}`;
+  const url =
+    file.source === "douyin"
+      ? `${getApiUrl()}/douyin/file/${file.uniqueId}`
+      : `${getApiUrl()}/${file.telegramId}/file/${file.uniqueId}`;
 
   useEffect(() => {
     const video = videoRef.current;

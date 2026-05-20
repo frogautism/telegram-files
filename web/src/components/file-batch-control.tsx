@@ -68,7 +68,9 @@ export default function FileBatchControl({
 
   const controlButtons = [
     {
-      url: "/files/start-download-multiple",
+      url: selectedFileObjects.some((file) => file.source === "douyin")
+        ? "/douyin/files/start-download-multiple"
+        : "/files/start-download-multiple",
       label: "Download",
       tooltip: `Download ${downloadableCounts} selected files`,
       icon: <Download className="mr-2 h-4 w-4" />,
@@ -78,7 +80,9 @@ export default function FileBatchControl({
       showConfirm: downloadableCounts > 5,
     },
     {
-      url: "/files/toggle-pause-download-multiple",
+      url: selectedFileObjects.some((file) => file.source === "douyin")
+        ? "/douyin/files/toggle-pause-download-multiple"
+        : "/files/toggle-pause-download-multiple",
       label: "Continue",
       tooltip: `Continue ${continuableCounts} paused downloads`,
       className: "bg-green-500 hover:bg-green-600 text-white",
@@ -88,7 +92,9 @@ export default function FileBatchControl({
       showConfirm: false,
     },
     {
-      url: "/files/toggle-pause-download-multiple",
+      url: selectedFileObjects.some((file) => file.source === "douyin")
+        ? "/douyin/files/toggle-pause-download-multiple"
+        : "/files/toggle-pause-download-multiple",
       label: "Pause",
       tooltip: `Pause ${pausableCounts} active downloads`,
       className: "bg-yellow-500 hover:bg-yellow-600 text-white",
@@ -98,7 +104,9 @@ export default function FileBatchControl({
       showConfirm: false,
     },
     {
-      url: "/files/cancel-download-multiple",
+      url: selectedFileObjects.some((file) => file.source === "douyin")
+        ? "/douyin/files/cancel-download-multiple"
+        : "/files/cancel-download-multiple",
       label: "Cancel",
       tooltip: `Cancel ${cancelableCounts} active downloads`,
       className: "bg-red-500 hover:bg-red-600 text-white",
@@ -108,7 +116,9 @@ export default function FileBatchControl({
       showConfirm: true,
     },
     {
-      url: "/files/remove-multiple",
+      url: selectedFileObjects.some((file) => file.source === "douyin")
+        ? "/douyin/files/remove-multiple"
+        : "/files/remove-multiple",
       label: "Delete",
       tooltip: `Delete ${deletableCounts} completed files`,
       className: "bg-red-500 hover:bg-red-600 text-white",

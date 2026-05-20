@@ -42,6 +42,7 @@ from .download_runtime import (
     _tdlib_account_root_path,
     reset_speed_state,
 )
+from .douyin_runtime import douyin_worker_loop as _douyin_worker_loop
 from .routers import register_routers
 from .tdlib import TdlibAuthManager
 from .tdlib_monitor import reset_tdlib_monitor_state as _reset_tdlib_monitor_state
@@ -122,12 +123,18 @@ async def lifespan(app: FastAPI):
             ),
         )
     )
+    douyin_worker_task = asyncio.create_task(_douyin_worker_loop(app))
     try:
         yield
     finally:
         worker_task.cancel()
+        douyin_worker_task.cancel()
         try:
             await worker_task
+        except asyncio.CancelledError:
+            pass
+        try:
+            await douyin_worker_task
         except asyncio.CancelledError:
             pass
         if tdlib_manager is not None:

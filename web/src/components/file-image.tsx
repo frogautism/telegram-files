@@ -123,6 +123,14 @@ export default function FilePreview({
 
   // 确定图像源
   const getImageSource = (uniqueId: string) => {
+    if (file.source === "douyin") {
+      if (!fallbackToMini && uniqueId) {
+        return `${getApiUrl()}/douyin/file/${uniqueId}`;
+      }
+      if (file.thumbnailUrl) {
+        return file.thumbnailUrl;
+      }
+    }
     if (!fallbackToMini && uniqueId) {
       return `${getApiUrl()}/${file.telegramId}/file/${uniqueId}`;
     }

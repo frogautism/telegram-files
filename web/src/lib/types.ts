@@ -40,6 +40,7 @@ export type DownloadStatus =
 export type TransferStatus = "idle" | "transferring" | "completed" | "error";
 
 export type TelegramFile = {
+  source?: "telegram" | "douyin";
   id: number;
   telegramId: number;
   uniqueId: string;
@@ -71,6 +72,9 @@ export type TelegramFile = {
   messageThreadId: number;
   hasReply?: boolean;
   reactionCount: number;
+  sourceId?: string;
+  awemeId?: string;
+  thumbnailUrl?: string;
 
   prev?: TelegramFile;
   next?: TelegramFile;
@@ -156,6 +160,20 @@ export const SettingKeys = [
   "speedUnits",
   "tags",
   "offlineResetPinEnabled",
+  "douyinCookies",
+  "douyinProxy",
+  "douyinPath",
+  "douyinThread",
+  "douyinRetryTimes",
+  "douyinRateLimit",
+  "douyinPreloadLimit",
+  "douyinCover",
+  "douyinMusic",
+  "douyinAvatar",
+  "douyinJson",
+  "douyinComments",
+  "douyinBrowserFallback",
+  "douyinBrowserHeadless",
 ] as const;
 
 export type SettingKey = (typeof SettingKeys)[number];
@@ -227,4 +245,19 @@ export type AutoDownloadRule = {
   downloadHistory: boolean;
   downloadCommentFiles: boolean;
   filterExpr: string;
+};
+
+export type DouyinSource = {
+  id: string;
+  url: string;
+  resolvedUrl: string;
+  urlType: string;
+  title: string;
+  authorName: string;
+  status: "idle" | "discovering" | "downloading" | "error";
+  auto: Auto & { state?: number };
+  lastError: string;
+  createdAt: number;
+  updatedAt: number;
+  discovered?: number;
 };

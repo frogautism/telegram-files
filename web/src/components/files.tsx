@@ -8,16 +8,28 @@ export default function Files({
   chatId,
   messageThreadId,
   link,
+  source = "telegram",
+  sourceId,
 }: {
   accountId: string;
   chatId: string;
   messageThreadId?: number;
   link?: string;
+  source?: "telegram" | "douyin";
+  sourceId?: string;
 }) {
   const isMobile = useIsMobile();
 
   if (isMobile) {
-    return <FileList accountId={accountId} chatId={chatId} link={link} />;
+    return (
+      <FileList
+        accountId={accountId}
+        chatId={chatId}
+        link={link}
+        source={source}
+        sourceId={sourceId}
+      />
+    );
   } else {
     return (
       <FileTable
@@ -25,6 +37,8 @@ export default function Files({
         chatId={chatId}
         messageThreadId={messageThreadId}
         link={link}
+        source={source}
+        sourceId={sourceId}
       />
     );
   }

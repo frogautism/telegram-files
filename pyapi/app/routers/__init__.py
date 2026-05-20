@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from . import downloads, files, maintenance, system, telegram_api, telegrams
+from . import douyin, downloads, files, maintenance, system, telegram_api, telegrams
 
 
 def register_routers(app: FastAPI) -> None:
@@ -12,3 +12,4 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(maintenance.router)
     app.include_router(files.router)
     app.include_router(downloads.router)
+    app.include_router(douyin.router)
