@@ -4,8 +4,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
+from yarl import URL
 
 from ..deps import get_db
 from ..douyin_bridge import DouyinBridgeUnavailable
@@ -38,6 +40,32 @@ def _payload_unique(payload: dict[str, Any]) -> str:
     return str((payload.get("file") or {}).get("uniqueId") or "").strip() if file_id == 0 else ""
 
 
+def _local_douyin_thumbnail(row: sqlite3.Row) -> Path | None:
+    local_path_text = str(row["local_path"] or "").strip()
+    if not local_path_text:
+        return None
+    local_path = Path(local_path_text)
+    author_dir = local_path.parent.parent if local_path.parent.name == "video" else local_path.parent
+    thumbnail_dir = author_dir / "thumbnail"
+    if not thumbnail_dir.exists():
+        return None
+    stem = local_path.stem
+    candidates = [
+        thumbnail_dir / f"{stem}_cover.jpg",
+        thumbnail_dir / f"{stem}_cover.jpeg",
+        thumbnail_dir / f"{stem}_cover.png",
+        thumbnail_dir / f"{stem}_cover.webp",
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    matches = sorted(thumbnail_dir.glob(f"*{str(row['aweme_id'] or '').strip()}*"))
+    for candidate in matches:
+        if candidate.is_file() and candidate.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+            return candidate
+    return None
+
+
 @router.get("/sources")
 def douyin_sources(db: sqlite3.Connection = Depends(get_db)) -> list[dict[str, Any]]:
     return list_douyin_sources(db)
@@ -57,6 +85,29 @@ async def douyin_source_create(
         return await discover_source(
             request.app,
             url=url,
+            mode=mode,
+            preload_only=preload_only,
+        )
+    except Exception as exc:
+        raise _source_error(exc) from exc
+
+
+@router.post("/sources/{sourceId}/refresh")
+async def douyin_source_refresh(
+    sourceId: str,
+    request: Request,
+    payload: dict[str, Any] | None = None,
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    source = get_douyin_source(db, sourceId)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Douyin source not found.")
+    mode = str((payload or {}).get("mode") or "").strip() or None
+    preload_only = bool((payload or {}).get("preloadOnly", True))
+    try:
+        return await discover_source(
+            request.app,
+            url=str(source["url"] or ""),
             mode=mode,
             preload_only=preload_only,
         )
@@ -103,6 +154,59 @@ async def douyin_file_preview(
     if thumbnail_url:
         return RedirectResponse(thumbnail_url)
     raise HTTPException(status_code=404, detail="File not found")
+
+
+@router.get("/file/{uniqueId}/thumbnail")
+async def douyin_file_thumbnail(
+    uniqueId: str,
+    db: sqlite3.Connection = Depends(get_db),
+):
+    row = douyin_file_row(db, unique_id=uniqueId)
+    if row is None:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    local_thumbnail = _local_douyin_thumbnail(row)
+    if local_thumbnail is not None:
+        media_type = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+        }.get(local_thumbnail.suffix.lower(), "image/jpeg")
+        return FileResponse(path=str(local_thumbnail), media_type=media_type)
+
+    thumbnail_url = str(row["thumbnail_url"] or "").strip()
+    if not thumbnail_url:
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://www.douyin.com/",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    }
+    try:
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(
+                URL(thumbnail_url, encoded=True),
+                timeout=aiohttp.ClientTimeout(total=20),
+                allow_redirects=True,
+            ) as response:
+                if response.status >= 400:
+                    raise HTTPException(status_code=404, detail="Thumbnail not found")
+                body = await response.read()
+                media_type = response.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
+                return Response(
+                    content=body,
+                    media_type=media_type or "image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Thumbnail not found") from exc
 
 
 @router.post("/file/start-download")

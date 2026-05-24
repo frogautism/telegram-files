@@ -72,6 +72,43 @@ def _make_config_loader(imports: dict[str, Any], config_dict: dict[str, Any]) ->
     return loader
 
 
+async def _collect_paged_user_items(
+    api_client: Any,
+    fetcher_name: str,
+    sec_uid: str,
+    *,
+    limit: int,
+    page_size: int = 20,
+) -> list[dict[str, Any]]:
+    fetcher = getattr(api_client, fetcher_name, None)
+    if not callable(fetcher):
+        raise RuntimeError(f"Douyin API client does not support {fetcher_name}")
+
+    items: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    max_cursor = 0
+    while len(items) < limit:
+        remaining = limit - len(items)
+        page = await fetcher(sec_uid, max_cursor=max_cursor, count=min(page_size, remaining))
+        page_items = [item for item in page.get("items", []) if isinstance(item, dict)]
+        for item in page_items:
+            aweme_id = str(item.get("aweme_id") or item.get("mix_id") or item.get("music_id") or "")
+            dedupe_key = aweme_id or json.dumps(item, sort_keys=True, ensure_ascii=False)
+            if dedupe_key in seen_ids:
+                continue
+            seen_ids.add(dedupe_key)
+            items.append(item)
+            if len(items) >= limit:
+                break
+
+        has_more = bool(page.get("has_more", False))
+        next_cursor = int(str(page.get("max_cursor") or 0) or 0)
+        if not has_more or next_cursor == max_cursor:
+            break
+        max_cursor = next_cursor
+    return items
+
+
 async def resolve_and_parse_url(
     app_config: AppConfig,
     db,
@@ -130,13 +167,20 @@ async def discover_awemes(
             sec_uid = str(parsed.get("sec_uid") or "")
             selected_mode = (mode or "post").strip().lower()
             if selected_mode == "like":
-                page = await api_client.get_user_like(sec_uid, count=limit)
+                fetcher_name = "get_user_like"
             elif selected_mode == "music":
-                page = await api_client.get_user_music(sec_uid, count=limit)
+                fetcher_name = "get_user_music"
+            elif selected_mode == "mix":
+                fetcher_name = "get_user_mix"
             else:
-                page = await api_client.get_user_post(sec_uid, count=limit)
+                fetcher_name = "get_user_post"
             awemes.extend(
-                item for item in page.get("items", [])[:limit] if isinstance(item, dict)
+                await _collect_paged_user_items(
+                    api_client,
+                    fetcher_name,
+                    sec_uid,
+                    limit=limit,
+                )
             )
         elif url_type == "collection":
             mix_id = str(parsed.get("mix_id") or "")
@@ -169,6 +213,95 @@ async def discover_awemes(
 def _progress_detail(value: Any) -> str:
     text = str(value or "").strip()
     return text[:200]
+
+
+_PRIMARY_MEDIA_SUFFIXES = {".mp4", ".mov", ".m4v", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
+_MUSIC_SUFFIXES = {".mp3", ".m4a", ".aac", ".wav"}
+_JSON_SUFFIXES = {".json"}
+
+
+def _replace_path(source: Path, target: Path) -> Path:
+    if source == target:
+        return target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        target.unlink()
+    source.replace(target)
+    return target
+
+
+def _douyin_asset_bucket(path: Path) -> str:
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    if suffix in _JSON_SUFFIXES:
+        return "json"
+    if suffix in _MUSIC_SUFFIXES or name.endswith("_music.mp3"):
+        return "music"
+    if (
+        name.endswith("_cover.jpg")
+        or name.endswith("_cover.jpeg")
+        or name.endswith("_cover.png")
+        or name.endswith("_cover.webp")
+        or name.endswith("_avatar.jpg")
+        or name.endswith("_avatar.jpeg")
+        or name.endswith("_avatar.png")
+        or name.endswith("_avatar.webp")
+    ):
+        return "thumbnail"
+    return "video"
+
+
+def _organize_downloaded_assets(base_path: Path, aweme_id: str) -> dict[str, Any]:
+    if not base_path.exists() or not aweme_id:
+        return {"localPath": "", "size": 0}
+
+    matches = [
+        path
+        for path in base_path.rglob(f"*{aweme_id}*")
+        if path.is_file()
+        and not path.name.endswith(".tmp")
+        and path.name != "download_manifest.jsonl"
+        and path.suffix.lower() in (_PRIMARY_MEDIA_SUFFIXES | _MUSIC_SUFFIXES | _JSON_SUFFIXES)
+    ]
+    if not matches:
+        return {"localPath": "", "size": 0}
+
+    organized: list[Path] = []
+    for path in sorted(matches, key=lambda item: len(item.parts)):
+        try:
+            relative = path.relative_to(base_path)
+        except ValueError:
+            continue
+        if not relative.parts:
+            continue
+        author_dir = relative.parts[0]
+        bucket = _douyin_asset_bucket(path)
+        target = base_path / author_dir / bucket / path.name
+        try:
+            organized.append(_replace_path(path, target))
+        except OSError:
+            organized.append(path)
+
+    primary = [
+        path
+        for path in organized
+        if path.is_file()
+        and path.parent.name == "video"
+        and path.suffix.lower() in _PRIMARY_MEDIA_SUFFIXES
+        and not path.name.lower().endswith(("_cover.jpg", "_cover.jpeg", "_cover.png", "_cover.webp"))
+        and "_avatar" not in path.name.lower()
+    ]
+    if not primary:
+        primary = [
+            path
+            for path in organized
+            if path.is_file() and path.suffix.lower() in _PRIMARY_MEDIA_SUFFIXES
+        ]
+    newest = max(primary, key=lambda path: path.stat().st_mtime) if primary else None
+    return {
+        "localPath": str(newest or ""),
+        "size": newest.stat().st_size if newest and newest.exists() else 0,
+    }
 
 
 class BridgeProgressReporter:
@@ -235,26 +368,18 @@ async def download_aweme(
             ok = await downloader._download_aweme_assets(
                 aweme,
                 str((aweme.get("author") or {}).get("nickname") or "douyin"),
-                mode="web",
+                mode="video",
             )
             if not ok:
                 raise RuntimeError("Douyin media download failed")
 
     base_path = Path(str(config_dict.get("path") or ""))
     aweme_id = str(aweme.get("aweme_id") or aweme.get("group_id") or "")
-    newest: Path | None = None
-    if base_path.exists() and aweme_id:
-        matches = [
-            path
-            for path in base_path.rglob(f"*{aweme_id}*")
-            if path.is_file() and path.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png", ".webp"}
-        ]
-        if matches:
-            newest = max(matches, key=lambda path: path.stat().st_mtime)
+    organized = _organize_downloaded_assets(base_path, aweme_id)
     return {
         "aweme": aweme,
-        "localPath": str(newest or ""),
-        "size": newest.stat().st_size if newest and newest.exists() else 0,
+        "localPath": organized["localPath"],
+        "size": organized["size"],
     }
 
 

@@ -102,6 +102,50 @@ class DouyinStoreTest(unittest.TestCase):
             )
         )
 
+    def test_file_listing_uses_total_count_and_date_cursor(self) -> None:
+        conn = self._connection()
+        source = upsert_douyin_source(conn, url="https://www.douyin.com/user/sec")
+        for aweme_id, created_at in (("old", 10), ("new", 30), ("middle", 20)):
+            upsert_douyin_aweme(
+                conn,
+                source_id=source["id"],
+                aweme={
+                    "aweme_id": aweme_id,
+                    "desc": aweme_id,
+                    "create_time": created_at,
+                    "author": {"nickname": "author"},
+                },
+            )
+
+        first_page = list_douyin_files(
+            conn,
+            source_id=source["id"],
+            filters={"type": "media", "sort": "date", "order": "desc", "limit": "2"},
+        )
+        self.assertEqual(first_page["count"], 3)
+        self.assertEqual(
+            [item["awemeId"] for item in first_page["files"]],
+            ["new", "middle"],
+        )
+        self.assertNotEqual(first_page["nextFromMessageId"], 0)
+
+        last_file = first_page["files"][-1]
+        second_page = list_douyin_files(
+            conn,
+            source_id=source["id"],
+            filters={
+                "type": "media",
+                "sort": "date",
+                "order": "desc",
+                "limit": "2",
+                "fromMessageId": str(last_file["id"]),
+                "fromSortField": str(last_file["date"]),
+            },
+        )
+        self.assertEqual(second_page["count"], 3)
+        self.assertEqual([item["awemeId"] for item in second_page["files"]], ["old"])
+        self.assertEqual(second_page["nextFromMessageId"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

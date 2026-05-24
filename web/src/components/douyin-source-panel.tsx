@@ -18,7 +18,7 @@ import type { DouyinSource } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Loader2, Plus, RefreshCw } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
 import useSWRMutation from "swr/mutation";
 import { toast } from "@/hooks/use-toast";
@@ -28,6 +28,7 @@ export default function DouyinSourcePanel() {
   const [url, setUrl] = useState("");
   const [preloadOnly, setPreloadOnly] = useState(true);
   const [mode, setMode] = useState("post");
+  const [sourceRefreshSignal, setSourceRefreshSignal] = useState(0);
   const {
     data: sources = [],
     isLoading,
@@ -55,6 +56,26 @@ export default function DouyinSourcePanel() {
     ) => POST(key, arg) as Promise<DouyinSource>,
   );
 
+  const { trigger: refreshSource, isMutating: isRefreshingSource } =
+    useSWRMutation(
+      "/douyin/sources/refresh",
+      (
+        _key,
+        {
+          arg,
+        }: {
+          arg: {
+            sourceId: string;
+            mode: string;
+          };
+        },
+      ) =>
+        POST(`/douyin/sources/${encodeURIComponent(arg.sourceId)}/refresh`, {
+          mode: arg.mode,
+          preloadOnly: true,
+        }) as Promise<DouyinSource>,
+    );
+
   const handleAdd = async () => {
     const trimmed = url.trim();
     if (!trimmed) return;
@@ -72,6 +93,35 @@ export default function DouyinSourcePanel() {
       toast({
         variant: "error",
         title: "Douyin source failed",
+        description: error instanceof Error ? error.message : "Request failed.",
+      });
+    }
+  };
+
+  const handleRefreshSelectedSource = useCallback(async () => {
+    if (!effectiveSourceId) {
+      await mutate();
+      return;
+    }
+    const source = await refreshSource({ sourceId: effectiveSourceId, mode });
+    await mutate();
+    toast({
+      variant: "success",
+      title: "Douyin source refreshed",
+      description: `Discovered ${source.discovered ?? 0} items.`,
+    });
+  }, [effectiveSourceId, mode, mutate, refreshSource]);
+
+  const handleRefreshSources = async () => {
+    try {
+      await handleRefreshSelectedSource();
+      if (effectiveSourceId) {
+        setSourceRefreshSignal((value) => value + 1);
+      }
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Douyin refresh failed",
         description: error instanceof Error ? error.message : "Request failed.",
       });
     }
@@ -105,10 +155,18 @@ export default function DouyinSourcePanel() {
             <Button
               variant="ghost"
               size="icon-sm"
-              aria-label="Refresh sources"
-              onClick={() => void mutate()}
+              aria-label={
+                effectiveSourceId ? "Refresh Douyin source" : "Refresh sources"
+              }
+              onClick={() => void handleRefreshSources()}
+              disabled={isRefreshingSource}
             >
-              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} />
+              <RefreshCw
+                className={cn(
+                  "h-4 w-4",
+                  (isLoading || isRefreshingSource) && "animate-spin",
+                )}
+              />
             </Button>
             <Link
               href="/accounts"
@@ -136,7 +194,7 @@ export default function DouyinSourcePanel() {
                 <SelectItem value="__all__">All Douyin sources</SelectItem>
                 {sources.map((source) => (
                   <SelectItem key={source.id} value={source.id}>
-                    {source.title || source.authorName || source.urlType || source.id}
+                    {source.authorName || source.title || source.urlType || source.id}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -197,6 +255,8 @@ export default function DouyinSourcePanel() {
         chatId="-1"
         source="douyin"
         sourceId={effectiveSourceId || undefined}
+        onRefreshSource={effectiveSourceId ? handleRefreshSelectedSource : undefined}
+        refreshSignal={sourceRefreshSignal}
       />
     </div>
   );

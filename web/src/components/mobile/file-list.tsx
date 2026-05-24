@@ -22,6 +22,8 @@ interface FileListProps {
   link?: string;
   source?: "telegram" | "douyin";
   sourceId?: string;
+  onRefreshSource?: () => Promise<void>;
+  refreshSignal?: number;
 }
 
 export default function FileList({
@@ -30,6 +32,8 @@ export default function FileList({
   link,
   source = "telegram",
   sourceId,
+  onRefreshSource,
+  refreshSignal,
 }: FileListProps) {
   const useFilesProps = useFiles(
     accountId,
@@ -48,6 +52,7 @@ export default function FileList({
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isTagsDrawerOpen, setIsTagsDrawerOpen] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
+  const lastRefreshSignalRef = React.useRef(refreshSignal);
   const [layout] = useLocalStorage<"detailed" | "gallery">(
     "telegramFileLayout",
     "gallery",
@@ -76,6 +81,7 @@ export default function FileList({
   const handleReload = async () => {
     setIsReloading(true);
     try {
+      await onRefreshSource?.();
       await reload();
     } catch {
       toast({
@@ -86,6 +92,22 @@ export default function FileList({
       setIsReloading(false);
     }
   };
+
+  useEffect(() => {
+    if (
+      refreshSignal === undefined ||
+      refreshSignal === lastRefreshSignalRef.current
+    ) {
+      return;
+    }
+    lastRefreshSignalRef.current = refreshSignal;
+    void reload().catch(() => {
+      toast({
+        variant: "error",
+        description: "Failed to refresh files.",
+      });
+    });
+  }, [refreshSignal, reload]);
 
   const rowVirtual = useWindowVirtualizer({
     count: hasMore ? files.length + 1 : files.length,

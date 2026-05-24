@@ -87,7 +87,7 @@ export default function FilePreview({
   useEffect(() => {
     setError(false);
     setFallbackToMini(false);
-  }, [file.thumbnail, file.thumbnailFile?.uniqueId, file.uniqueId]);
+  }, [file.thumbnail, file.thumbnailFile?.uniqueId, file.thumbnailUrl, file.uniqueId]);
 
   useEffect(() => {
     if (!isFullPreview) {
@@ -137,9 +137,17 @@ export default function FilePreview({
     return `data:image/jpeg;base64,${file.thumbnail}`;
   };
 
+  const getDouyinThumbnailSource = () =>
+    `${getApiUrl()}/douyin/file/${encodeURIComponent(file.uniqueId)}/thumbnail`;
+
   // 渲染有图像的文件
-  const renderImage = (width: number, height: number, uniqueId: string) => {
-    const src = getImageSource(uniqueId);
+  const renderImage = (
+    width: number,
+    height: number,
+    uniqueId: string,
+    source?: string,
+  ) => {
+    const src = source ?? getImageSource(uniqueId);
 
     const { width: calculatedWidth, height: calculatedHeight } =
       calculateImageDimensions(width, height, viewportHeight);
@@ -194,6 +202,15 @@ export default function FilePreview({
   // base64缩略图
   if (file.thumbnail) {
     return renderImage(isFullPreview ? 600 : 32, isFullPreview ? 600 : 32, "");
+  }
+
+  if (file.source === "douyin" && file.thumbnailUrl) {
+    return renderImage(
+      file.extra?.width || 320,
+      file.extra?.height || 430,
+      "",
+      getDouyinThumbnailSource(),
+    );
   }
 
   // 渲染没有图像的文件

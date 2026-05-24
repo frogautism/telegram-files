@@ -114,7 +114,10 @@ def build_douyin_config(config: AppConfig, db) -> dict[str, Any]:
         "avatar": _bool(settings.get("douyinAvatar"), False),
         "json": _bool(settings.get("douyinJson"), True),
         "database": False,
-        "folderstyle": True,
+        "folderstyle": False,
+        "filename_template": "{date}_{title}_{id}",
+        "folder_template": "{date}_{title}_{id}",
+        "author_dir": "nickname",
         "download_pinned": False,
         "comments": {
             "enabled": comments_enabled,

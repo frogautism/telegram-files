@@ -10,6 +10,8 @@ export default function Files({
   link,
   source = "telegram",
   sourceId,
+  onRefreshSource,
+  refreshSignal,
 }: {
   accountId: string;
   chatId: string;
@@ -17,6 +19,8 @@ export default function Files({
   link?: string;
   source?: "telegram" | "douyin";
   sourceId?: string;
+  onRefreshSource?: () => Promise<void>;
+  refreshSignal?: number;
 }) {
   const isMobile = useIsMobile();
 
@@ -28,6 +32,8 @@ export default function Files({
         link={link}
         source={source}
         sourceId={sourceId}
+        onRefreshSource={onRefreshSource}
+        refreshSignal={refreshSignal}
       />
     );
   } else {
@@ -39,6 +45,8 @@ export default function Files({
         link={link}
         source={source}
         sourceId={sourceId}
+        onRefreshSource={onRefreshSource}
+        refreshSignal={refreshSignal}
       />
     );
   }

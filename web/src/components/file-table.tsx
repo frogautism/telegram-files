@@ -14,6 +14,7 @@ import {
   Music2,
   RefreshCw,
   Rows3,
+  SquareCheckBig,
   WandSparkles,
 } from "lucide-react";
 import { useFiles } from "@/hooks/use-files";
@@ -47,6 +48,8 @@ interface FileTableProps {
   link?: string;
   source?: "telegram" | "douyin";
   sourceId?: string;
+  onRefreshSource?: () => Promise<void>;
+  refreshSignal?: number;
 }
 
 type Density = "compact" | "comfortable" | "detail";
@@ -60,6 +63,8 @@ export function FileTable({
   link,
   source = "telegram",
   sourceId,
+  onRefreshSource,
+  refreshSignal,
 }: FileTableProps) {
   const [selectedFiles, setSelectedFiles] = useState<Set<number>>(new Set());
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
@@ -81,6 +86,7 @@ export function FileTable({
     size,
     files,
     hasMore,
+    totalCount,
     handleLoadMore,
   } = useFilesProps;
   const [currentViewFile, setCurrentViewFile] = useState<
@@ -89,6 +95,7 @@ export function FileTable({
   const [viewerOpen, setViewerOpen] = useState(false);
   const [isReloading, setIsReloading] = useState(false);
   const [density, setDensity] = useState<Density>("comfortable");
+  const lastRefreshSignalRef = useRef(refreshSignal);
   const fileGroups = useMemo(() => groupFilesByMessage(files), [files]);
 
   useEffect(() => {
@@ -148,13 +155,22 @@ export function FileTable({
     return false;
   }).length;
 
+  const visibleFileIds = useMemo(() => files.map((file) => file.id), [files]);
+  const allVisibleSelected =
+    visibleFileIds.length > 0 &&
+    visibleFileIds.every((fileId) => selectedFiles.has(fileId));
+
   const toggleSelectAll = () => {
-    if (files.length === 0) return;
-    if (selectedFiles.size === files.length) {
-      setSelectedFiles(new Set());
-      return;
-    }
-    setSelectedFiles(new Set(files.map((file) => file.id)));
+    if (visibleFileIds.length === 0) return;
+    setSelectedFiles((current) => {
+      const nextSelected = new Set(current);
+      if (allVisibleSelected) {
+        visibleFileIds.forEach((fileId) => nextSelected.delete(fileId));
+      } else {
+        visibleFileIds.forEach((fileId) => nextSelected.add(fileId));
+      }
+      return nextSelected;
+    });
   };
 
   const handleSelectFile = (fileId: number) => {
@@ -171,6 +187,7 @@ export function FileTable({
   const handleReload = async () => {
     setIsReloading(true);
     try {
+      await onRefreshSource?.();
       await reload();
     } catch {
       toast({ variant: "error", description: "Failed to refresh files." });
@@ -178,6 +195,19 @@ export function FileTable({
       setIsReloading(false);
     }
   };
+
+  useEffect(() => {
+    if (
+      refreshSignal === undefined ||
+      refreshSignal === lastRefreshSignalRef.current
+    ) {
+      return;
+    }
+    lastRefreshSignalRef.current = refreshSignal;
+    void reload().catch(() => {
+      toast({ variant: "error", description: "Failed to refresh files." });
+    });
+  }, [refreshSignal, reload]);
 
   const gridClass =
     density === "compact"
@@ -233,9 +263,9 @@ export function FileTable({
                 ) : (
                   <>
                     <span className="font-mono tabular-nums">
-                      {files.length}
+                      {totalCount}
                     </span>{" "}
-                    {files.length === 1 ? "item" : "items"}
+                    {totalCount === 1 ? "item" : "items"}
                     {activeFilterCount > 0 && (
                       <>
                         {" "}
@@ -252,6 +282,23 @@ export function FileTable({
             </div>
 
             <div className="flex items-center gap-1.5">
+              <TooltipWrapper
+                content={
+                  allVisibleSelected
+                    ? "Clear loaded selection"
+                    : "Select all loaded items"
+                }
+              >
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleSelectAll}
+                  disabled={files.length === 0}
+                >
+                  <SquareCheckBig className="h-4 w-4" />
+                  {allVisibleSelected ? "Clear" : "Select all"}
+                </Button>
+              </TooltipWrapper>
               <DensityToggle density={density} onChange={updateDensity} />
               <TooltipWrapper content="Refresh">
                 <Button
@@ -291,7 +338,7 @@ export function FileTable({
                 onClick={toggleSelectAll}
                 className="text-foreground underline-offset-2 hover:underline"
               >
-                {selectedFiles.size === files.length
+                {allVisibleSelected
                   ? "Clear selection"
                   : "Select all visible"}
               </button>

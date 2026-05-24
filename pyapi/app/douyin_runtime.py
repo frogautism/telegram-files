@@ -56,6 +56,20 @@ def runtime_from_app(app: FastAPI) -> DouyinRuntime:
     return runtime
 
 
+def _douyin_source_labels(parsed: dict[str, Any], awemes: list[dict[str, Any]]) -> tuple[str, str]:
+    url_type = str(parsed.get("type") or "douyin")
+    for aweme in awemes:
+        author = aweme.get("author") if isinstance(aweme, dict) else None
+        if not isinstance(author, dict):
+            continue
+        nickname = str(author.get("nickname") or "").strip()
+        if nickname:
+            return nickname, nickname
+    if url_type == "user":
+        return "Douyin user", ""
+    return url_type or "douyin", ""
+
+
 async def emit_douyin_file_status(payload: dict[str, Any], *, session_id: str = "") -> None:
     await _emit_ws_payload(
         _build_ws_payload(EVENT_TYPE_FILE_STATUS, payload),
@@ -76,12 +90,14 @@ async def discover_source(
     source_id = str(source["id"])
     try:
         resolved_url, parsed, awemes = await discover_awemes(config, db, url, mode=mode)
+        title, author_name = _douyin_source_labels(parsed, awemes)
         source = upsert_douyin_source(
             db,
             url=url,
             resolved_url=resolved_url,
             url_type=str(parsed.get("type") or ""),
-            title=str(parsed.get("type") or "douyin"),
+            title=title,
+            author_name=author_name,
             status="idle" if preload_only else "downloading",
             source_id=source_id,
         )

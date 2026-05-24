@@ -436,6 +436,11 @@ export function useFiles(
     return hasMore;
   }, [pages]);
 
+  const totalCount = useMemo(() => {
+    if (!pages || pages.length === 0) return files.length;
+    return pages[0]?.count ?? files.length;
+  }, [files.length, pages]);
+
   const handleLoadMore = useCallback(async () => {
     if (isLoading || isValidating || !hasMore || error) return;
     await setSize((currentSize) => currentSize + 1);
@@ -493,5 +498,6 @@ export function useFiles(
     clearFilters,
     handleLoadMore,
     hasMore,
+    totalCount,
   };
 }

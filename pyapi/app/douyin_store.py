@@ -463,45 +463,83 @@ def list_douyin_files(
     filters: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     filters = filters or {}
-    clauses = ["1 = 1"]
-    params: list[Any] = []
+    base_clauses = ["1 = 1"]
+    base_params: list[Any] = []
     if source_id:
-        clauses.append("source_id = ?")
-        params.append(source_id)
+        base_clauses.append("source_id = ?")
+        base_params.append(source_id)
 
     search = str(filters.get("search") or "").strip()
     if search:
-        clauses.append("(file_name LIKE ? OR caption LIKE ? OR aweme_id LIKE ?)")
-        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+        base_clauses.append("(file_name LIKE ? OR caption LIKE ? OR aweme_id LIKE ?)")
+        base_params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
 
     file_type = str(filters.get("type") or "").strip()
     if file_type and file_type != "all":
         if file_type == "media":
-            clauses.append("type IN ('photo', 'video')")
+            base_clauses.append("type IN ('photo', 'video')")
         else:
-            clauses.append("type = ?")
-            params.append(file_type)
+            base_clauses.append("type = ?")
+            base_params.append(file_type)
 
     status = str(filters.get("downloadStatus") or "").strip()
     if status:
-        clauses.append("download_status = ?")
-        params.append(status)
+        base_clauses.append("download_status = ?")
+        base_params.append(status)
 
     transfer_status = str(filters.get("transferStatus") or "").strip()
     if transfer_status:
-        clauses.append("transfer_status = ?")
-        params.append(transfer_status)
+        base_clauses.append("transfer_status = ?")
+        base_params.append(transfer_status)
 
+    total_count = int_or_default(
+        db.execute(
+            f"SELECT COUNT(*) FROM douyin_file WHERE {' AND '.join(base_clauses)}",
+            base_params,
+        ).fetchone()[0],
+        0,
+    )
+
+    sort_key = str(filters.get("sort") or "date").strip().lower()
+    sort_column = {
+        "completion_date": "completion_date",
+        "size": "size",
+        "date": "date",
+    }.get(sort_key, "date")
+    order = str(filters.get("order") or "desc").strip().lower()
+    if order not in {"asc", "desc"}:
+        order = "desc"
+    comparator = ">" if order == "asc" else "<"
+    order_sql = "ASC" if order == "asc" else "DESC"
+
+    page_clauses = list(base_clauses)
+    page_params = list(base_params)
     from_id = int_or_default(filters.get("fromMessageId"), 0)
     if from_id > 0:
-        clauses.append("id < ?")
-        params.append(from_id)
+        cursor_value_raw = filters.get("fromSortField")
+        if cursor_value_raw is None or cursor_value_raw == "":
+            cursor_row = db.execute(
+                f"SELECT {sort_column} FROM douyin_file WHERE id = ? LIMIT 1",
+                (from_id,),
+            ).fetchone()
+            cursor_value_raw = cursor_row[0] if cursor_row is not None else None
+        cursor_value = int_or_default(cursor_value_raw, 0)
+        page_clauses.append(
+            f"({sort_column} {comparator} ? OR ({sort_column} = ? AND id {comparator} ?))"
+        )
+        page_params.extend([cursor_value, cursor_value, from_id])
 
     limit = min(200, max(1, int_or_default(filters.get("limit"), 20)))
-    where_sql = " AND ".join(clauses)
+    where_sql = " AND ".join(page_clauses)
     rows = db.execute(
-        f"SELECT * FROM douyin_file WHERE {where_sql} ORDER BY date DESC, id DESC LIMIT ?",
-        [*params, limit + 1],
+        f"""
+        SELECT *
+        FROM douyin_file
+        WHERE {where_sql}
+        ORDER BY {sort_column} {order_sql}, id {order_sql}
+        LIMIT ?
+        """,
+        [*page_params, limit + 1],
     ).fetchall()
     has_more = len(rows) > limit
     if has_more:
@@ -509,7 +547,7 @@ def list_douyin_files(
     files = [serialize_douyin_file(row) for row in rows]
     return {
         "files": files,
-        "count": len(files) + (1 if has_more else 0),
+        "count": total_count,
         "nextFromMessageId": int_or_default(rows[-1]["id"], 0) if has_more and rows else 0,
     }
 
