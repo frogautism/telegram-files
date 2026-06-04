@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from .douyin_store import douyin_file_row, int_or_default, now_ms
+from .douyin_store import douyin_file_row, float_or_default, int_or_default, now_ms
 
 VIDEO_TYPES = {"video"}
 
@@ -260,7 +260,7 @@ def extract_frames(
     *,
     unique_id: str,
     mode: str,
-    interval: int = 5,
+    interval: float = 5.0,
     timestamp_ms: int | None = None,
     max_frames: int = 60,
     fmt: str = "jpg",
@@ -285,7 +285,7 @@ def extract_frames(
     if mode not in {"interval", "timestamp", "keyframe"}:
         raise ValueError(f"Unsupported mode '{mode}'.")
 
-    interval = max(1, int_or_default(interval, 5))
+    interval = max(0.1, float_or_default(interval, 5.0))
     max_frames = max(1, int_or_default(max_frames, 60))
     fmt = (fmt or "jpg").strip().lower() or "jpg"
     aweme_id = str(row["aweme_id"] or "").strip() or "unknown"
@@ -309,7 +309,7 @@ def extract_frames(
                 "-i",
                 str(video_path),
                 "-vf",
-                f"fps=1/{interval}",
+                f"fps=1/{interval:g}",
                 "-frames:v",
                 str(max_frames),
                 "-q:v",
@@ -353,7 +353,7 @@ def extract_frames(
     frames: list[dict[str, Any]] = []
     for index, produced_path in enumerate(produced):
         if mode == "interval":
-            frame_ts = interval * index * 1000
+            frame_ts = round(interval * index * 1000)
         elif mode == "timestamp":
             frame_ts = int(timestamp_ms or 0)
         else:

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 
 from .. import douyin_frames
 from ..deps import get_db
-from ..douyin_store import int_or_default
+from ..douyin_store import float_or_default, int_or_default
 
 router = APIRouter(prefix="/douyin")
 
@@ -30,7 +30,7 @@ async def douyin_extract_frames(
 ) -> dict[str, Any]:
     payload = payload or {}
     mode = str(payload.get("mode") or "interval").strip()
-    interval = int_or_default(payload.get("interval"), 5)
+    interval = float_or_default(payload.get("interval"), 5.0)
     timestamp_ms = (
         int_or_default(payload.get("timestampMs"), 0)
         if payload.get("timestampMs") is not None

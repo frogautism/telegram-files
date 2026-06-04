@@ -22,6 +22,15 @@ def int_or_default(value: Any, default: int = 0) -> int:
         return default
 
 
+def float_or_default(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def source_id_for_url(url: str) -> str:
     return hashlib.sha1(url.strip().encode("utf-8")).hexdigest()[:16]
 

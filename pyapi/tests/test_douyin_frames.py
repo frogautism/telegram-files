@@ -139,6 +139,41 @@ class DouyinFramesCoreTest(unittest.TestCase):
             self.assertEqual(frames_dir, Path(tmp) / "author" / "frames" / "777")
             self.assertTrue(frames_dir.exists())
 
+    def test_fractional_interval_is_preserved(self) -> None:
+        conn = self._connection()
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "author" / "video" / "777.mp4"
+            video.parent.mkdir(parents=True, exist_ok=True)
+            video.write_bytes(b"x")
+            unique_id = self._seed_video(conn, str(video))
+            captured_args: list[list[str]] = []
+            original_ffmpeg_path = douyin_frames.ffmpeg_path
+            original_run_ffmpeg = douyin_frames._run_ffmpeg
+            douyin_frames.ffmpeg_path = lambda: "ffmpeg"
+
+            def fake_run_ffmpeg(args: list[str]) -> None:
+                captured_args.append(args)
+                Path(args[-1].replace("%04d", "0001")).write_bytes(b"frame")
+                Path(args[-1].replace("%04d", "0002")).write_bytes(b"frame")
+
+            douyin_frames._run_ffmpeg = fake_run_ffmpeg
+            try:
+                result = douyin_frames.extract_frames(
+                    conn,
+                    unique_id=unique_id,
+                    mode="interval",
+                    interval=0.3,
+                    max_frames=2,
+                )
+            finally:
+                douyin_frames.ffmpeg_path = original_ffmpeg_path
+                douyin_frames._run_ffmpeg = original_run_ffmpeg
+
+            self.assertEqual(result["extracted"], 2)
+            self.assertIn("fps=1/0.3", captured_args[0])
+            self.assertEqual(result["frames"][0]["timestampMs"], 0)
+            self.assertEqual(result["frames"][1]["timestampMs"], 300)
+
     @unittest.skipUnless(douyin_frames.ffmpeg_available(), "ffmpeg not available")
     def test_interval_extraction_and_replace(self) -> None:
         conn = self._connection()
