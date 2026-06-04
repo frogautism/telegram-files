@@ -78,19 +78,25 @@ def douyin_runtime_path(config: AppConfig) -> str:
 
 
 def douyin_downloader_path(config: AppConfig) -> str:
-    configured = str(config.douyin_downloader_path or "").strip()
-    if configured:
-        return configured
+    """Return the configured external downloader override path.
 
-    candidates = [
-        Path("D:/dev/douyin-downloader"),
-        Path("/app/douyin-downloader"),
-        Path.cwd().parent / "douyin-downloader",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
+    This is an optional development override. When unset (or the path does not
+    exist) an empty string is returned and the vendored package is used instead.
+    """
+    configured = str(config.douyin_downloader_path or "").strip()
+    if configured and Path(configured).exists():
+        return configured
     return ""
+
+
+def vendored_downloader_version() -> str:
+    """Return the vendored douyin downloader ``__version__`` (empty on failure)."""
+    try:
+        from app.vendor import douyin_downloader
+
+        return str(getattr(douyin_downloader, "__version__", "") or "")
+    except Exception:
+        return ""
 
 
 def build_douyin_config(config: AppConfig, db) -> dict[str, Any]:

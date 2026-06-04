@@ -260,4 +260,63 @@ export type DouyinSource = {
   createdAt: number;
   updatedAt: number;
   discovered?: number;
+  displayName: string;
+  autoRefresh: { enabled: boolean; intervalSeconds: number };
+  lastRefreshStartedAt: number;
+  lastRefreshCompletedAt: number;
+  lastDiscoveredCount: number;
+  newestAwemeId: string;
+  newestCreateTime: number;
+  refreshStatus: string;
+  refreshError: string;
+  totalFiles: number;
+  completedDownloads: number;
+  failedDownloads: number;
+};
+
+export type DouyinJobKind =
+  | "source_refresh"
+  | "file_download"
+  | "batch_download"
+  | "frame_extract"
+  | "batch_frame_extract";
+export type DouyinJobState =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+export type DouyinJob = {
+  id: string;
+  sourceId: string;
+  fileUniqueId: string;
+  url: string;
+  kind: DouyinJobKind;
+  state: DouyinJobState;
+  total: number;
+  success: number;
+  failed: number;
+  skipped: number;
+  step: string;
+  error: string;
+  createdAt: number;
+  updatedAt: number;
+  startedAt: number;
+  completedAt: number;
+};
+export type DouyinFrame = {
+  id: number;
+  frameUid: string;
+  fileUniqueId: string;
+  awemeId: string;
+  frameIndex: number;
+  timestampMs: number;
+  width: number;
+  height: number;
+  size: number;
+  mode: string;
+  format: string;
+  tags: string;
+  createdAt: number;
+  url: string;
 };

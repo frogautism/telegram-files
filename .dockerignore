@@ -112,6 +112,9 @@ web/next-env.d.ts
 
 **/*.iml
 app/
+# Never drop the vendored python backend (including the vendored douyin downloader).
+!pyapi/app
+!pyapi/app/**
 
 **/.env.*
 !**/.env.example

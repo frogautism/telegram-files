@@ -11,7 +11,8 @@
       "Bash(python -m unittest tests.test_transfer_ops -v)",
       "Bash(python -m unittest discover -s tests -v)",
       "Bash(xargs -0 sed -i 's/rounded-\\\\[4px\\\\]/rounded-md/g; s/rounded-\\\\[6px\\\\]/rounded-md/g')",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(ls -la && echo \"---PYAPI---\" && ls -la pyapi 2>/dev/null && echo \"---DOUYIN-DL---\" && ls -la /d/dev/douyin-downloader 2>/dev/null)"
     ]
   }
 }

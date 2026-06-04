@@ -113,6 +113,20 @@ export async function POST(api: string, data?: any): Promise<any> {
   });
 }
 
+export async function PATCH(api: string, data?: any): Promise<any> {
+  return await request(api, {
+    method: "PATCH",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function DELETE(api: string, data?: any): Promise<any> {
+  return await request(api, {
+    method: "DELETE",
+    body: data === undefined ? undefined : JSON.stringify(data),
+  });
+}
+
 export type TelegramApiArg = {
   data: any;
   method: string;

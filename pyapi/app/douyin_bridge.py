@@ -14,29 +14,52 @@ class DouyinBridgeUnavailable(RuntimeError):
     pass
 
 
-def _ensure_import_path(app_config: AppConfig) -> None:
+def _ensure_import_path(app_config: AppConfig) -> str:
+    """Inject an external downloader override path onto ``sys.path``.
+
+    Returns the resolved override path, or an empty string when no valid
+    override is configured (in which case the vendored package is used).
+    """
     package_path = douyin_downloader_path(app_config)
     if not package_path:
-        raise DouyinBridgeUnavailable(
-            "Douyin downloader package was not found. Set DOUYIN_DOWNLOADER_PATH."
-        )
+        return ""
     root = Path(package_path).resolve()
     if not root.exists():
-        raise DouyinBridgeUnavailable(f"Douyin downloader path does not exist: {root}")
+        return ""
     root_text = str(root)
     if root_text not in sys.path:
         sys.path.insert(0, root_text)
+    return root_text
 
 
 def _imports(app_config: AppConfig) -> dict[str, Any]:
-    _ensure_import_path(app_config)
+    override_root = _ensure_import_path(app_config)
     try:
-        from auth import CookieManager
-        from config import ConfigLoader
-        from control import QueueManager, RateLimiter, RetryHandler
-        from core import DouyinAPIClient, DownloaderFactory, URLParser
-        from storage import FileManager
-        from utils.validators import is_short_url, normalize_short_url
+        if override_root:
+            from auth import CookieManager
+            from config import ConfigLoader
+            from control import QueueManager, RateLimiter, RetryHandler
+            from core import DouyinAPIClient, DownloaderFactory, URLParser
+            from storage import FileManager
+            from utils.validators import is_short_url, normalize_short_url
+        else:
+            from app.vendor.douyin_downloader.auth import CookieManager
+            from app.vendor.douyin_downloader.config import ConfigLoader
+            from app.vendor.douyin_downloader.control import (
+                QueueManager,
+                RateLimiter,
+                RetryHandler,
+            )
+            from app.vendor.douyin_downloader.core import (
+                DouyinAPIClient,
+                DownloaderFactory,
+                URLParser,
+            )
+            from app.vendor.douyin_downloader.storage import FileManager
+            from app.vendor.douyin_downloader.utils.validators import (
+                is_short_url,
+                normalize_short_url,
+            )
     except Exception as exc:  # pragma: no cover - import path/env dependent
         raise DouyinBridgeUnavailable(str(exc)) from exc
     return {

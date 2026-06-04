@@ -94,8 +94,30 @@ def serialize_douyin_file(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _source_to_dict(row: sqlite3.Row) -> dict[str, Any]:
+def _row_has(row: sqlite3.Row, key: str) -> bool:
+    try:
+        return key in row.keys()
+    except (AttributeError, TypeError):
+        return False
+
+
+def _source_counts(row: sqlite3.Row) -> dict[str, int]:
+    return {
+        "totalFiles": int_or_default(row["total_files"], 0)
+        if _row_has(row, "total_files")
+        else 0,
+        "completedDownloads": int_or_default(row["completed_downloads"], 0)
+        if _row_has(row, "completed_downloads")
+        else 0,
+        "failedDownloads": int_or_default(row["failed_downloads"], 0)
+        if _row_has(row, "failed_downloads")
+        else 0,
+    }
+
+
+def _source_to_dict(row: sqlite3.Row, counts: dict[str, int] | None = None) -> dict[str, Any]:
     auto = _parse_json(row["auto_settings"]) or default_douyin_auto_settings()
+    resolved_counts = counts if counts is not None else _source_counts(row)
     return {
         "id": str(row["id"] or ""),
         "url": str(row["url"] or ""),
@@ -108,6 +130,44 @@ def _source_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "lastError": str(row["last_error"] or ""),
         "createdAt": int_or_default(row["created_at"], 0),
         "updatedAt": int_or_default(row["updated_at"], 0),
+        "displayName": str(row["display_name"] or ""),
+        "autoRefresh": {
+            "enabled": bool(int_or_default(row["auto_refresh_enabled"], 0)),
+            "intervalSeconds": max(
+                1800, int_or_default(row["auto_refresh_interval"], 1800)
+            ),
+        },
+        "lastRefreshStartedAt": int_or_default(row["last_refresh_started_at"], 0),
+        "lastRefreshCompletedAt": int_or_default(row["last_refresh_completed_at"], 0),
+        "lastDiscoveredCount": int_or_default(row["last_discovered_count"], 0),
+        "newestAwemeId": str(row["newest_aweme_id"] or ""),
+        "newestCreateTime": int_or_default(row["newest_create_time"], 0),
+        "refreshStatus": str(row["refresh_status"] or "idle"),
+        "refreshError": str(row["refresh_error"] or ""),
+        "totalFiles": resolved_counts.get("totalFiles", 0),
+        "completedDownloads": resolved_counts.get("completedDownloads", 0),
+        "failedDownloads": resolved_counts.get("failedDownloads", 0),
+    }
+
+
+def _count_source_files(db: sqlite3.Connection, source_id: str) -> dict[str, int]:
+    row = db.execute(
+        """
+        SELECT
+            COUNT(*) AS total_files,
+            SUM(CASE WHEN download_status = 'completed' THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN download_status = 'error' THEN 1 ELSE 0 END) AS failed
+        FROM douyin_file
+        WHERE source_id = ?
+        """,
+        (source_id,),
+    ).fetchone()
+    if row is None:
+        return {"totalFiles": 0, "completedDownloads": 0, "failedDownloads": 0}
+    return {
+        "totalFiles": int_or_default(row["total_files"], 0),
+        "completedDownloads": int_or_default(row["completed"], 0),
+        "failedDownloads": int_or_default(row["failed"], 0),
     }
 
 
@@ -211,15 +271,45 @@ def list_douyin_sources(db: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = db.execute(
         "SELECT * FROM douyin_source ORDER BY updated_at DESC, created_at DESC"
     ).fetchall()
-    return [_source_to_dict(row) for row in rows]
+    count_rows = db.execute(
+        """
+        SELECT
+            source_id,
+            COUNT(*) AS total_files,
+            SUM(CASE WHEN download_status = 'completed' THEN 1 ELSE 0 END) AS completed,
+            SUM(CASE WHEN download_status = 'error' THEN 1 ELSE 0 END) AS failed
+        FROM douyin_file
+        GROUP BY source_id
+        """
+    ).fetchall()
+    counts: dict[str, dict[str, int]] = {}
+    for count_row in count_rows:
+        counts[str(count_row["source_id"] or "")] = {
+            "totalFiles": int_or_default(count_row["total_files"], 0),
+            "completedDownloads": int_or_default(count_row["completed"], 0),
+            "failedDownloads": int_or_default(count_row["failed"], 0),
+        }
+    return [
+        _source_to_dict(
+            row,
+            counts.get(
+                str(row["id"] or ""),
+                {"totalFiles": 0, "completedDownloads": 0, "failedDownloads": 0},
+            ),
+        )
+        for row in rows
+    ]
 
 
 def get_douyin_source(db: sqlite3.Connection, source_id: str) -> dict[str, Any] | None:
+    sid = source_id.strip()
     row = db.execute(
         "SELECT * FROM douyin_source WHERE id = ? LIMIT 1",
-        (source_id.strip(),),
+        (sid,),
     ).fetchone()
-    return _source_to_dict(row) if row is not None else None
+    if row is None:
+        return None
+    return _source_to_dict(row, _count_source_files(db, sid))
 
 
 def update_douyin_source_auto_settings(
@@ -241,6 +331,192 @@ def update_douyin_source_auto_settings(
     )
     db.commit()
     return get_douyin_source(db, source_id)
+
+
+def update_douyin_source_display(
+    db: sqlite3.Connection,
+    source_id: str,
+    *,
+    display_name: str | None = None,
+    auto_refresh_enabled: bool | None = None,
+    auto_refresh_interval: int | None = None,
+) -> dict[str, Any] | None:
+    if get_douyin_source(db, source_id) is None:
+        return None
+    sets: list[str] = []
+    params: list[Any] = []
+    if display_name is not None:
+        sets.append("display_name = ?")
+        params.append(display_name.strip())
+    if auto_refresh_enabled is not None:
+        sets.append("auto_refresh_enabled = ?")
+        params.append(1 if auto_refresh_enabled else 0)
+    if auto_refresh_interval is not None:
+        sets.append("auto_refresh_interval = ?")
+        params.append(max(1800, int(auto_refresh_interval)))
+    sets.append("updated_at = ?")
+    params.append(now_ms())
+    params.append(source_id.strip())
+    db.execute(
+        f"UPDATE douyin_source SET {', '.join(sets)} WHERE id = ?",
+        params,
+    )
+    db.commit()
+    return get_douyin_source(db, source_id)
+
+
+def delete_douyin_source(
+    db: sqlite3.Connection,
+    source_id: str,
+    *,
+    delete_files: bool = False,
+) -> dict[str, Any]:
+    sid = source_id.strip()
+    existing = db.execute(
+        "SELECT id FROM douyin_source WHERE id = ? LIMIT 1", (sid,)
+    ).fetchone()
+    if existing is None:
+        return {"deleted": False, "removedFiles": 0}
+
+    file_rows = db.execute(
+        "SELECT id, unique_id, local_path FROM douyin_file WHERE source_id = ?",
+        (sid,),
+    ).fetchall()
+    frame_rows = db.execute(
+        """
+        SELECT local_path
+        FROM douyin_frame
+        WHERE source_id = ?
+           OR file_unique_id IN (
+               SELECT unique_id FROM douyin_file WHERE source_id = ?
+           )
+        """,
+        (sid, sid),
+    ).fetchall()
+    removed_files = len(file_rows)
+    if delete_files:
+        for file_row in file_rows:
+            local_path = str(file_row["local_path"] or "").strip()
+            if not local_path:
+                continue
+            try:
+                Path(local_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+        for frame_row in frame_rows:
+            local_path = str(frame_row["local_path"] or "").strip()
+            if not local_path:
+                continue
+            try:
+                Path(local_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    # Explicitly remove douyin_file rows (FK CASCADE may be disabled on some
+    # connections, e.g. in-memory test databases without foreign_keys pragma).
+    db.execute(
+        """
+        DELETE FROM douyin_frame
+        WHERE source_id = ?
+           OR file_unique_id IN (
+               SELECT unique_id FROM douyin_file WHERE source_id = ?
+           )
+        """,
+        (sid, sid),
+    )
+    db.execute("DELETE FROM douyin_file WHERE source_id = ?", (sid,))
+    db.execute("DELETE FROM douyin_source WHERE id = ?", (sid,))
+    db.commit()
+    return {"deleted": True, "removedFiles": removed_files}
+
+
+def record_source_refresh_start(db: sqlite3.Connection, source_id: str) -> None:
+    db.execute(
+        """
+        UPDATE douyin_source
+        SET refresh_status = 'refreshing',
+            last_refresh_started_at = ?,
+            refresh_error = '',
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (now_ms(), now_ms(), source_id.strip()),
+    )
+    db.commit()
+
+
+def record_source_refresh_result(
+    db: sqlite3.Connection,
+    source_id: str,
+    *,
+    discovered: int,
+    new: int,
+    existing: int,
+    failed: int,
+    newest_aweme_id: str = "",
+    newest_create_time: int = 0,
+    error: str = "",
+) -> None:
+    sid = source_id.strip()
+    row = db.execute(
+        "SELECT newest_create_time FROM douyin_source WHERE id = ? LIMIT 1",
+        (sid,),
+    ).fetchone()
+    if row is None:
+        return
+    current_newest = int_or_default(row["newest_create_time"], 0)
+    update_newest = (
+        bool(newest_aweme_id) and int(newest_create_time or 0) >= current_newest
+    )
+    status = "error" if error else "idle"
+    ts = now_ms()
+    if update_newest:
+        db.execute(
+            """
+            UPDATE douyin_source
+            SET refresh_status = ?,
+                last_refresh_completed_at = ?,
+                last_discovered_count = ?,
+                newest_aweme_id = ?,
+                newest_create_time = ?,
+                refresh_error = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                ts,
+                max(0, int(discovered)),
+                newest_aweme_id,
+                int(newest_create_time or 0),
+                error,
+                ts,
+                sid,
+            ),
+        )
+    else:
+        db.execute(
+            """
+            UPDATE douyin_source
+            SET refresh_status = ?,
+                last_refresh_completed_at = ?,
+                last_discovered_count = ?,
+                refresh_error = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (status, ts, max(0, int(discovered)), error, ts, sid),
+        )
+    db.commit()
+
+
+def douyin_aweme_exists(db: sqlite3.Connection, aweme_id: str) -> bool:
+    unique_id = unique_id_for_aweme(str(aweme_id).strip())
+    row = db.execute(
+        "SELECT 1 FROM douyin_file WHERE unique_id = ? LIMIT 1",
+        (unique_id,),
+    ).fetchone()
+    return row is not None
 
 
 def _aweme_media_type(aweme: dict[str, Any]) -> str:
@@ -303,7 +579,6 @@ def upsert_douyin_aweme(
     if not aweme_id:
         return None
 
-    author = aweme.get("author") if isinstance(aweme.get("author"), dict) else {}
     desc = str(aweme.get("desc") or aweme_id).strip()
     file_type = _aweme_media_type(aweme)
     unique_id = unique_id_for_aweme(aweme_id)

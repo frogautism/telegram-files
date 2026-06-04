@@ -1,5 +1,7 @@
 "use client";
 
+import DouyinJobHistory from "@/components/douyin-job-history";
+import DouyinSourceManager from "@/components/douyin-source-manager";
 import Files from "@/components/files";
 import ThemeToggleButton from "@/components/theme-toggle-button";
 import { Button } from "@/components/ui/button";
@@ -16,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { POST } from "@/lib/api";
 import type { DouyinSource } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { Loader2, Plus, RefreshCw } from "lucide-react";
+import { Loader2, Plus, RefreshCw, Settings2 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
 import useSWR from "swr";
@@ -29,6 +31,7 @@ export default function DouyinSourcePanel() {
   const [preloadOnly, setPreloadOnly] = useState(true);
   const [mode, setMode] = useState("post");
   const [sourceRefreshSignal, setSourceRefreshSignal] = useState(0);
+  const [managerOpen, setManagerOpen] = useState(false);
   const {
     data: sources = [],
     isLoading,
@@ -66,14 +69,12 @@ export default function DouyinSourcePanel() {
         }: {
           arg: {
             sourceId: string;
-            mode: string;
           };
         },
       ) =>
         POST(`/douyin/sources/${encodeURIComponent(arg.sourceId)}/refresh`, {
-          mode: arg.mode,
-          preloadOnly: true,
-        }) as Promise<DouyinSource>,
+          backfill: false,
+        }) as Promise<{ discovered: number; new: number }>,
     );
 
   const handleAdd = async () => {
@@ -103,14 +104,14 @@ export default function DouyinSourcePanel() {
       await mutate();
       return;
     }
-    const source = await refreshSource({ sourceId: effectiveSourceId, mode });
+    const result = await refreshSource({ sourceId: effectiveSourceId });
     await mutate();
     toast({
       variant: "success",
       title: "Douyin source refreshed",
-      description: `Discovered ${source.discovered ?? 0} items.`,
+      description: `${result.new ?? 0} new · ${result.discovered ?? 0} discovered`,
     });
-  }, [effectiveSourceId, mode, mutate, refreshSource]);
+  }, [effectiveSourceId, mutate, refreshSource]);
 
   const handleRefreshSources = async () => {
     try {
@@ -152,6 +153,16 @@ export default function DouyinSourcePanel() {
           </Link>
 
           <div className="flex items-center gap-1.5">
+            <DouyinJobHistory />
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Manage sources"
+              title="Manage sources"
+              onClick={() => setManagerOpen(true)}
+            >
+              <Settings2 className="h-4 w-4" />
+            </Button>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -194,7 +205,11 @@ export default function DouyinSourcePanel() {
                 <SelectItem value="__all__">All Douyin sources</SelectItem>
                 {sources.map((source) => (
                   <SelectItem key={source.id} value={source.id}>
-                    {source.authorName || source.title || source.urlType || source.id}
+                    {source.displayName ||
+                      source.authorName ||
+                      source.title ||
+                      source.urlType ||
+                      source.id}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -257,6 +272,13 @@ export default function DouyinSourcePanel() {
         sourceId={effectiveSourceId || undefined}
         onRefreshSource={effectiveSourceId ? handleRefreshSelectedSource : undefined}
         refreshSignal={sourceRefreshSignal}
+      />
+
+      <DouyinSourceManager
+        open={managerOpen}
+        onOpenChange={setManagerOpen}
+        sources={sources}
+        mutate={mutate}
       />
     </div>
   );

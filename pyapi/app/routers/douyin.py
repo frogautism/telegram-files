@@ -11,8 +11,16 @@ from yarl import URL
 
 from ..deps import get_db
 from ..douyin_bridge import DouyinBridgeUnavailable
-from ..douyin_runtime import cancel_download, discover_source, start_download_task
+from ..douyin_jobs import get_job, list_jobs
+from ..douyin_runtime import (
+    cancel_download,
+    cancel_job,
+    discover_source,
+    retry_job,
+    start_download_task,
+)
 from ..douyin_store import (
+    delete_douyin_source,
     douyin_file_row,
     get_douyin_source,
     list_douyin_files,
@@ -20,8 +28,9 @@ from ..douyin_store import (
     update_douyin_file_tags,
     update_douyin_files_tags,
     update_douyin_source_auto_settings,
+    update_douyin_source_display,
 )
-from ..route_utils import _get_filters, _int_or_default, _parse_batch_files
+from ..route_utils import _bool_or_none, _get_filters, _int_or_default, _parse_batch_files
 
 router = APIRouter(prefix="/douyin")
 
@@ -92,6 +101,53 @@ async def douyin_source_create(
         raise _source_error(exc) from exc
 
 
+@router.patch("/sources/{sourceId}")
+def douyin_source_update(
+    sourceId: str,
+    payload: dict[str, Any] | None = None,
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    body = payload if isinstance(payload, dict) else {}
+    display_name = None
+    if "displayName" in body and body.get("displayName") is not None:
+        display_name = str(body.get("displayName"))
+    auto_refresh_enabled = None
+    auto_refresh_interval = None
+    auto_refresh = body.get("autoRefresh")
+    if isinstance(auto_refresh, dict):
+        if "enabled" in auto_refresh:
+            auto_refresh_enabled = bool(auto_refresh.get("enabled"))
+        if auto_refresh.get("intervalSeconds") is not None:
+            auto_refresh_interval = _int_or_default(
+                auto_refresh.get("intervalSeconds"), 1800
+            )
+    updated = update_douyin_source_display(
+        db,
+        sourceId,
+        display_name=display_name,
+        auto_refresh_enabled=auto_refresh_enabled,
+        auto_refresh_interval=auto_refresh_interval,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Douyin source not found.")
+    return updated
+
+
+@router.delete("/sources/{sourceId}")
+def douyin_source_delete(
+    sourceId: str,
+    request: Request,
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    delete_files = bool(
+        _bool_or_none(request.query_params.get("deleteFiles")) or False
+    )
+    result = delete_douyin_source(db, sourceId, delete_files=delete_files)
+    if not result.get("deleted"):
+        raise HTTPException(status_code=404, detail="Douyin source not found.")
+    return result
+
+
 @router.post("/sources/{sourceId}/refresh")
 async def douyin_source_refresh(
     sourceId: str,
@@ -103,16 +159,27 @@ async def douyin_source_refresh(
     if source is None:
         raise HTTPException(status_code=404, detail="Douyin source not found.")
     mode = str((payload or {}).get("mode") or "").strip() or None
+    backfill = bool((payload or {}).get("backfill", False))
     preload_only = bool((payload or {}).get("preloadOnly", True))
     try:
-        return await discover_source(
+        result = await discover_source(
             request.app,
             url=str(source["url"] or ""),
             mode=mode,
             preload_only=preload_only,
+            source_id=sourceId,
+            backfill=backfill,
         )
     except Exception as exc:
         raise _source_error(exc) from exc
+    return {
+        "sourceId": str(result.get("id") or sourceId),
+        "discovered": _int_or_default(result.get("discovered"), 0),
+        "new": _int_or_default(result.get("new"), 0),
+        "existing": _int_or_default(result.get("existing"), 0),
+        "failed": _int_or_default(result.get("failed"), 0),
+        "jobId": str(result.get("jobId") or ""),
+    }
 
 
 @router.get("/sources/{sourceId}/files")
@@ -425,3 +492,42 @@ def douyin_source_update_auto_settings(
     if updated is None:
         raise HTTPException(status_code=404, detail="Douyin source not found.")
     return Response(status_code=200)
+
+
+@router.get("/jobs")
+def douyin_jobs(
+    request: Request,
+    db: sqlite3.Connection = Depends(get_db),
+) -> list[dict[str, Any]]:
+    status = str(request.query_params.get("status") or "").strip()
+    limit = _int_or_default(request.query_params.get("limit"), 50)
+    return list_jobs(db, status=status, limit=limit)
+
+
+@router.post("/jobs/{jobId}/cancel")
+async def douyin_job_cancel(
+    jobId: str,
+    request: Request,
+    db: sqlite3.Connection = Depends(get_db),
+) -> Response:
+    if get_job(db, jobId) is None:
+        raise HTTPException(status_code=404, detail="Douyin job not found.")
+    await cancel_job(request.app, jobId)
+    return Response(status_code=200)
+
+
+@router.post("/jobs/{jobId}/retry")
+async def douyin_job_retry(
+    jobId: str,
+    request: Request,
+    db: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    if get_job(db, jobId) is None:
+        raise HTTPException(status_code=404, detail="Douyin job not found.")
+    try:
+        result = await retry_job(request.app, jobId)
+    except Exception as exc:
+        raise _source_error(exc) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Douyin job not found.")
+    return result

@@ -18,6 +18,7 @@ import { useToast } from "./use-toast";
 import { useDebounce } from "use-debounce";
 import { getWsUrl } from "@/lib/api";
 import { useSearchParams } from "next/navigation";
+import { mutate as globalMutate } from "swr";
 
 const WS_URL = `${getWsUrl()}`;
 
@@ -81,6 +82,21 @@ export const WebSocketProvider: React.FC<WebSocketProviderProps> = ({
       try {
         const payload: WebSocketMessage = lastJsonMessage;
         const timestamp = payload.timestamp;
+        // Douyin job updates arrive as a string-typed event ("douyinJob");
+        // revalidate the job-history / sources SWR keys so the UI stays live.
+        // Falls back to the SWR refreshInterval polling in douyin-job-history
+        // if this event is never delivered.
+        if ((payload.type as unknown as string) === "douyinJob") {
+          void globalMutate(
+            (key) =>
+              typeof key === "string" &&
+              (key.startsWith("/douyin/jobs") ||
+                key === "/douyin/sources"),
+            undefined,
+            { revalidate: true },
+          );
+          return;
+        }
         switch (payload.type) {
           case WebSocketMessageType.ERROR:
             toast({

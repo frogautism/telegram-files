@@ -1,3 +1,7 @@
+[tool.ruff]
+# Vendored third-party code (the douyin downloader) ships as-is; do not lint it.
+extend-exclude = ["app/vendor"]
+
 [tool.vulture]
 ignore_decorators = ["@app.*", "@router.*"]
 ignore_names = [

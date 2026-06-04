@@ -3,22 +3,37 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from fastapi import FastAPI
 
-from .app_state import EVENT_TYPE_FILE_STATUS, _build_ws_payload, _emit_ws_payload
+from .app_state import (
+    EVENT_TYPE_DOUYIN_JOB,
+    EVENT_TYPE_FILE_STATUS,
+    _build_ws_payload,
+    _emit_ws_payload,
+)
 from .config import AppConfig
 from .douyin_bridge import discover_awemes, download_aweme, metadata_from_row
+from .douyin_jobs import (
+    create_job,
+    get_job,
+    update_job,
+)
+from .douyin_jobs import (
+    cancel_job as store_cancel_job,
+)
 from .douyin_store import (
+    douyin_aweme_exists,
     douyin_file_for_transfer,
     douyin_file_row,
     douyin_transfer_candidates,
+    get_douyin_source,
     list_douyin_sources,
     mark_douyin_source_status,
     now_ms,
+    record_source_refresh_result,
+    record_source_refresh_start,
     remove_douyin_download,
     serialize_douyin_file,
     update_douyin_file_status,
@@ -35,6 +50,8 @@ class DouyinRuntime:
     def __init__(self) -> None:
         self.tasks: dict[str, asyncio.Task] = {}
         self.cancelled: set[str] = set()
+        # Map unique_id -> active job id for single-file downloads.
+        self.file_jobs: dict[str, str] = {}
 
     def cancel(self, unique_id: str) -> None:
         self.cancelled.add(unique_id)
@@ -45,6 +62,7 @@ class DouyinRuntime:
     def forget(self, unique_id: str) -> None:
         self.tasks.pop(unique_id, None)
         self.cancelled.discard(unique_id)
+        self.file_jobs.pop(unique_id, None)
 
 
 def runtime_from_app(app: FastAPI) -> DouyinRuntime:
@@ -77,19 +95,46 @@ async def emit_douyin_file_status(payload: dict[str, Any], *, session_id: str = 
     )
 
 
+async def emit_douyin_job(payload: dict[str, Any], *, session_id: str = "") -> None:
+    await _emit_ws_payload(
+        _build_ws_payload(EVENT_TYPE_DOUYIN_JOB, payload),
+        session_id=session_id or None,
+    )
+
+
+def _aweme_id_of(aweme: dict[str, Any]) -> str:
+    return str(aweme.get("aweme_id") or aweme.get("group_id") or "").strip()
+
+
 async def discover_source(
     app: FastAPI,
     *,
     url: str,
     mode: str | None = None,
     preload_only: bool = True,
+    source_id: str | None = None,
+    backfill: bool = False,
 ) -> dict[str, Any]:
     db: sqlite3.Connection = app.state.db
     config: AppConfig = app.state.config
-    source = upsert_douyin_source(db, url=url, status="discovering")
+    source = upsert_douyin_source(
+        db, url=url, status="discovering", source_id=source_id
+    )
     source_id = str(source["id"])
+    record_source_refresh_start(db, source_id)
+    job = create_job(db, kind="source_refresh", source_id=source_id, url=url, state="running")
+    job_id = str(job["id"])
+    await emit_douyin_job(job)
+
+    discovered = 0
+    new_count = 0
+    existing_count = 0
+    failed = 0
+    newest_aweme_id = ""
+    newest_create_time = 0
     try:
         resolved_url, parsed, awemes = await discover_awemes(config, db, url, mode=mode)
+        discovered = len(awemes)
         title, author_name = _douyin_source_labels(parsed, awemes)
         source = upsert_douyin_source(
             db,
@@ -101,9 +146,32 @@ async def discover_source(
             status="idle" if preload_only else "downloading",
             source_id=source_id,
         )
+        update_job(db, job_id, total=discovered, step="discovered")
+
+        to_download: list[str] = []
         for aweme in awemes:
+            aweme_id = _aweme_id_of(aweme)
+            if not aweme_id:
+                failed += 1
+                continue
+            create_time = int(aweme.get("create_time") or 0)
+            if create_time >= newest_create_time:
+                newest_create_time = create_time
+                newest_aweme_id = aweme_id
+
+            already = douyin_aweme_exists(db, aweme_id)
+            if already:
+                existing_count += 1
+                # Incremental: awemes are newest-first; once we hit a known
+                # aweme the remainder is already known, so stop upserting.
+                if not backfill:
+                    break
+                continue
+
+            new_count += 1
             record = upsert_douyin_aweme(db, source_id=source_id, aweme=aweme)
             if record is not None:
+                to_download.append(str(record["uniqueId"]))
                 await emit_douyin_file_status(
                     {
                         "source": "douyin",
@@ -116,17 +184,65 @@ async def discover_source(
                         "transferStatus": record["transferStatus"],
                     }
                 )
+
         mark_douyin_source_status(db, source_id, "idle")
+        record_source_refresh_result(
+            db,
+            source_id,
+            discovered=discovered,
+            new=new_count,
+            existing=existing_count,
+            failed=failed,
+            newest_aweme_id=newest_aweme_id,
+            newest_create_time=newest_create_time,
+        )
         if not preload_only:
-            for item in awemes:
-                record = upsert_douyin_aweme(db, source_id=source_id, aweme=item)
-                if record is not None:
-                    start_download_task(app, str(record["uniqueId"]))
-        refreshed = source
-        refreshed["discovered"] = len(awemes)
+            for unique_id in to_download:
+                start_download_task(app, unique_id)
+
+        finished = update_job(
+            db,
+            job_id,
+            state="completed",
+            total=discovered,
+            success=new_count,
+            skipped=existing_count,
+            failed=failed,
+            step="done",
+        )
+        if finished is not None:
+            await emit_douyin_job(finished)
+
+        refreshed = get_douyin_source(db, source_id) or source
+        refreshed = dict(refreshed)
+        refreshed.update(
+            {
+                "discovered": discovered,
+                "new": new_count,
+                "existing": existing_count,
+                "failed": failed,
+                "jobId": job_id,
+            }
+        )
         return refreshed
     except Exception as exc:
         mark_douyin_source_status(db, source_id, "error", error=str(exc))
+        record_source_refresh_result(
+            db,
+            source_id,
+            discovered=discovered,
+            new=new_count,
+            existing=existing_count,
+            failed=failed,
+            newest_aweme_id=newest_aweme_id,
+            newest_create_time=newest_create_time,
+            error=str(exc),
+        )
+        failed_job = update_job(
+            db, job_id, state="failed", error=str(exc), step="error"
+        )
+        if failed_job is not None:
+            await emit_douyin_job(failed_job)
         raise
 
 
@@ -153,6 +269,17 @@ def start_download_task(
         download_status="downloading",
         downloaded_size=0,
     )
+    runtime.cancelled.discard(unique_id)
+    job = create_job(
+        db,
+        kind="file_download",
+        source_id=str(row["source_id"] or ""),
+        file_unique_id=unique_id,
+        total=1,
+        state="running",
+        step="downloading",
+    )
+    runtime.file_jobs[unique_id] = str(job["id"])
     task = asyncio.create_task(_download_file_task(app, unique_id, session_id=session_id))
     runtime.tasks[unique_id] = task
     return payload
@@ -162,6 +289,14 @@ async def _download_file_task(app: FastAPI, unique_id: str, *, session_id: str =
     db: sqlite3.Connection = app.state.db
     config: AppConfig = app.state.config
     runtime = runtime_from_app(app)
+    job_id = runtime.file_jobs.get(unique_id, "")
+
+    async def _emit_job(**fields: Any) -> None:
+        if not job_id:
+            return
+        updated = update_job(db, job_id, **fields)
+        if updated is not None:
+            await emit_douyin_job(updated, session_id=session_id)
 
     async def _emit_current(status: str, **patch: Any) -> None:
         payload = update_douyin_file_status(
@@ -185,19 +320,51 @@ async def _download_file_task(app: FastAPI, unique_id: str, *, session_id: str =
                 session_id=session_id,
             )
 
+    loop = asyncio.get_running_loop()
+
     try:
         row = douyin_file_row(db, unique_id=unique_id)
         if row is None:
             return
         aweme = metadata_from_row(row)
         await _emit_current("downloading")
+        await _emit_job(step="downloading")
 
-        def _on_bridge_event(_event: dict[str, Any]) -> None:
-            return None
+        def _apply_bridge_event(event: dict[str, Any]) -> None:
+            kind = str(event.get("kind") or "")
+            if kind == "total":
+                update_job(db, job_id, total=int(event.get("total") or 0))
+            elif kind == "step":
+                detail = str(event.get("detail") or "")
+                step_text = str(event.get("step") or "")
+                update_job(db, job_id, step=f"{step_text}: {detail}" if detail else step_text)
+            elif kind == "item":
+                status = str(event.get("status") or "")
+                update_job(db, job_id, step=f"item:{status}" if status else "item")
+            elif kind == "author":
+                nickname = str(event.get("nickname") or "")
+                if nickname:
+                    update_job(db, job_id, step=f"author:{nickname}")
+            else:
+                return
+            updated = get_job(db, job_id)
+            if updated is not None:
+                asyncio.run_coroutine_threadsafe(
+                    emit_douyin_job(updated, session_id=session_id), loop
+                )
+
+        def _on_bridge_event(event: dict[str, Any]) -> None:
+            if not job_id:
+                return
+            try:
+                _apply_bridge_event(event)
+            except Exception:  # pragma: no cover - progress reporting best-effort
+                logger.debug("Douyin job progress update failed", exc_info=True)
 
         result = await download_aweme(config, db, aweme, on_event=_on_bridge_event)
         if unique_id in runtime.cancelled:
             await _emit_current("paused")
+            await _emit_job(state="cancelled", step="cancelled")
             return
         local_path = str(result.get("localPath") or "")
         size = int(result.get("size") or 0)
@@ -207,11 +374,14 @@ async def _download_file_task(app: FastAPI, unique_id: str, *, session_id: str =
             downloaded_size=size,
             size=size,
         )
+        await _emit_job(state="completed", success=1, step="completed")
     except asyncio.CancelledError:
         await _emit_current("paused")
+        await _emit_job(state="cancelled", step="cancelled")
     except Exception as exc:
         logger.warning("Douyin download failed unique=%s: %s", unique_id, exc)
         await _emit_current("error", error=str(exc))
+        await _emit_job(state="failed", failed=1, error=str(exc), step="error")
     finally:
         runtime.forget(unique_id)
 
@@ -245,14 +415,94 @@ async def cancel_download(app: FastAPI, unique_id: str, *, remove: bool = False)
     return payload
 
 
+async def cancel_job(app: FastAPI, job_id: str) -> dict[str, Any] | None:
+    db: sqlite3.Connection = app.state.db
+    job = get_job(db, job_id)
+    if job is None:
+        return None
+    if job["state"] not in {"queued", "running"}:
+        return job
+    file_unique_id = str(job.get("fileUniqueId") or "")
+    if job["kind"] != "file_download" or not file_unique_id:
+        return job
+
+    # Cancel the underlying download task; its handler marks the job cancelled
+    # and emits the ws event.
+    await cancel_download(app, file_unique_id)
+    cancelled = get_job(db, job_id)
+    if cancelled is not None and cancelled["state"] in {"queued", "running"}:
+        cancelled = store_cancel_job(db, job_id)
+    if cancelled is not None:
+        await emit_douyin_job(cancelled)
+    return cancelled
+
+
+async def retry_job(app: FastAPI, job_id: str) -> dict[str, Any] | None:
+    db: sqlite3.Connection = app.state.db
+    job = get_job(db, job_id)
+    if job is None:
+        return None
+    kind = str(job.get("kind") or "")
+    if kind == "file_download":
+        file_unique_id = str(job.get("fileUniqueId") or "")
+        if not file_unique_id:
+            return job
+        start_download_task(app, file_unique_id)
+        return get_job(db, job_id) or job
+    if kind == "source_refresh":
+        source_id = str(job.get("sourceId") or "")
+        source = get_douyin_source(db, source_id) if source_id else None
+        url = str(job.get("url") or (source or {}).get("url") or "")
+        if not url:
+            return job
+        return await discover_source(
+            app,
+            url=url,
+            preload_only=True,
+            source_id=source_id or None,
+            backfill=False,
+        )
+    return job
+
+
 async def douyin_worker_loop(app: FastAPI) -> None:
     while True:
         try:
             await _run_auto_download(app)
             await _run_auto_transfer(app)
+            await _run_auto_refresh(app)
         except Exception as exc:
             logger.exception("Douyin worker loop error: %s", exc)
         await asyncio.sleep(10)
+
+
+async def _run_auto_refresh(app: FastAPI) -> None:
+    db: sqlite3.Connection = app.state.db
+    now = now_ms()
+    for source in list_douyin_sources(db):
+        auto_refresh = source.get("autoRefresh")
+        if not isinstance(auto_refresh, dict) or not bool(auto_refresh.get("enabled")):
+            continue
+        interval_ms = max(1800, int(auto_refresh.get("intervalSeconds") or 1800)) * 1000
+        last_completed = int(source.get("lastRefreshCompletedAt") or 0)
+        if last_completed and (now - last_completed) < interval_ms:
+            continue
+        if str(source.get("refreshStatus") or "") == "refreshing":
+            continue
+        url = str(source.get("url") or "")
+        source_id = str(source.get("id") or "")
+        if not url:
+            continue
+        try:
+            await discover_source(
+                app,
+                url=url,
+                preload_only=True,
+                source_id=source_id,
+                backfill=False,
+            )
+        except Exception as exc:
+            logger.warning("Douyin auto-refresh failed source=%s: %s", source_id, exc)
 
 
 async def _run_auto_download(app: FastAPI) -> None:

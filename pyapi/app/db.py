@@ -165,17 +165,27 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS douyin_source
         (
-            id            VARCHAR(64) PRIMARY KEY,
-            url           TEXT        NOT NULL,
-            resolved_url  TEXT,
-            url_type      VARCHAR(64),
-            title         TEXT,
-            author_name   TEXT,
-            status        VARCHAR(64) NOT NULL DEFAULT 'idle',
-            auto_settings TEXT,
-            last_error    TEXT,
-            created_at    BIGINT      NOT NULL,
-            updated_at    BIGINT      NOT NULL
+            id                       VARCHAR(64) PRIMARY KEY,
+            url                      TEXT        NOT NULL,
+            resolved_url             TEXT,
+            url_type                 VARCHAR(64),
+            title                    TEXT,
+            author_name              TEXT,
+            status                   VARCHAR(64) NOT NULL DEFAULT 'idle',
+            auto_settings            TEXT,
+            last_error               TEXT,
+            display_name             TEXT,
+            auto_refresh_enabled     INT         NOT NULL DEFAULT 0,
+            auto_refresh_interval    INT         NOT NULL DEFAULT 1800,
+            last_refresh_started_at  BIGINT,
+            last_refresh_completed_at BIGINT,
+            last_discovered_count    INT         NOT NULL DEFAULT 0,
+            newest_aweme_id          VARCHAR(64),
+            newest_create_time       BIGINT      NOT NULL DEFAULT 0,
+            refresh_status           VARCHAR(64),
+            refresh_error            TEXT,
+            created_at               BIGINT      NOT NULL,
+            updated_at               BIGINT      NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS douyin_file
@@ -217,6 +227,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
             url             TEXT,
             kind            VARCHAR(64) NOT NULL,
             state           VARCHAR(64) NOT NULL,
+            step            TEXT,
             total           INT NOT NULL DEFAULT 0,
             success         INT NOT NULL DEFAULT 0,
             failed          INT NOT NULL DEFAULT 0,
@@ -227,6 +238,28 @@ def init_schema(conn: sqlite3.Connection) -> None:
             started_at      BIGINT,
             completed_at    BIGINT
         );
+
+        CREATE TABLE IF NOT EXISTS douyin_frame
+        (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            frame_uid       VARCHAR(255) NOT NULL UNIQUE,
+            file_unique_id  VARCHAR(255) NOT NULL,
+            aweme_id        VARCHAR(64)  NOT NULL,
+            source_id       VARCHAR(64),
+            frame_index     INT          NOT NULL DEFAULT 0,
+            timestamp_ms    BIGINT       NOT NULL DEFAULT 0,
+            local_path      TEXT,
+            width           INT          NOT NULL DEFAULT 0,
+            height          INT          NOT NULL DEFAULT 0,
+            size            BIGINT       NOT NULL DEFAULT 0,
+            mode            VARCHAR(32),
+            format          VARCHAR(16)  DEFAULT 'jpg',
+            tags            TEXT,
+            created_at      BIGINT       NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_douyin_frame_file
+            ON douyin_frame (file_unique_id, frame_index);
 
         CREATE INDEX IF NOT EXISTS idx_douyin_file_source
             ON douyin_file (source_id, date DESC, id DESC);
@@ -243,6 +276,27 @@ def init_schema(conn: sqlite3.Connection) -> None:
     )
     _ensure_column(conn, "file_record", "download_error", "TEXT")
     _ensure_column(conn, "file_record", "verification_status", "VARCHAR(255)")
+
+    _ensure_column(conn, "douyin_source", "display_name", "TEXT")
+    _ensure_column(
+        conn, "douyin_source", "auto_refresh_enabled", "INT NOT NULL DEFAULT 0"
+    )
+    _ensure_column(
+        conn, "douyin_source", "auto_refresh_interval", "INT NOT NULL DEFAULT 1800"
+    )
+    _ensure_column(conn, "douyin_source", "last_refresh_started_at", "BIGINT")
+    _ensure_column(conn, "douyin_source", "last_refresh_completed_at", "BIGINT")
+    _ensure_column(
+        conn, "douyin_source", "last_discovered_count", "INT NOT NULL DEFAULT 0"
+    )
+    _ensure_column(conn, "douyin_source", "newest_aweme_id", "VARCHAR(64)")
+    _ensure_column(
+        conn, "douyin_source", "newest_create_time", "BIGINT NOT NULL DEFAULT 0"
+    )
+    _ensure_column(conn, "douyin_source", "refresh_status", "VARCHAR(64)")
+    _ensure_column(conn, "douyin_source", "refresh_error", "TEXT")
+
+    _ensure_column(conn, "douyin_job", "step", "TEXT")
     conn.commit()
 
 

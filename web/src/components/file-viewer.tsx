@@ -16,10 +16,12 @@ import {
   ArrowDown,
   ChevronLeft,
   ChevronRight,
+  Film,
   Info,
   Loader2,
   X,
 } from "lucide-react";
+import DouyinFrameGalleryDialog from "@/components/douyin-frame-gallery";
 import { AnimatePresence, motion } from "framer-motion";
 import { type useFiles } from "@/hooks/use-files";
 import FileExtra from "@/components/file-extra";
@@ -51,6 +53,7 @@ export default function FileViewer({
   isLoading,
 }: FileViewerProps) {
   const [showInfo, setShowInfo] = useState(false);
+  const [showFrames, setShowFrames] = useState(false);
   const { handleNavigation, direction } = useFileSwitch({
     file,
     onFileChange,
@@ -92,6 +95,11 @@ export default function FileViewer({
 
   const canDownload =
     file.downloadStatus === "idle" || file.downloadStatus === "error";
+
+  const canExtractFrames =
+    file.source === "douyin" &&
+    file.type === "video" &&
+    file.downloadStatus === "completed";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -157,6 +165,16 @@ export default function FileViewer({
                   )}
                   Download
                 </Button>
+              )}
+              {canExtractFrames && (
+                <button
+                  type="button"
+                  onClick={() => setShowFrames(true)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+                >
+                  <Film className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Frames</span>
+                </button>
               )}
               <button
                 type="button"
@@ -348,6 +366,13 @@ export default function FileViewer({
           </div>
         </DialogPrimitive.Content>
       </DialogPortal>
+      {canExtractFrames && (
+        <DouyinFrameGalleryDialog
+          open={showFrames}
+          onOpenChange={setShowFrames}
+          uniqueId={file.uniqueId}
+        />
+      )}
     </Dialog>
   );
 }

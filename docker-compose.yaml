@@ -27,7 +27,6 @@ services:
       APP_ROOT: "/app/data"
       TELEGRAM_API_ID: ${TELEGRAM_API_ID}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
-      DOUYIN_DOWNLOADER_PATH: "/app/douyin-downloader"
       DOUYIN_PATH: "/app/data/douyin"
       # Uncomment the following lines to enable database connection, you can see .env.example for more details.
       #DB_TYPE: ${DB_TYPE}
@@ -40,7 +39,6 @@ services:
       - "6543:80"
     volumes:
       - ./data:/app/data
-      - ../douyin-downloader:/app/douyin-downloader:ro
       # - ./other-files-for-transfer:/app/other-files-for-transfer
 
 # Uncomment the following lines to enable database services.
