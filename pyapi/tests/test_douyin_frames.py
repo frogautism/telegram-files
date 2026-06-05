@@ -1,7 +1,9 @@
+import shutil
 import sqlite3
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -9,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from app import douyin_frames
 from app.config import AppConfig
-from app.db import init_schema
+from app.db import create_connection, init_schema
 from app.douyin_store import (
     douyin_file_row,
     remove_douyin_download,
@@ -454,16 +456,27 @@ class DouyinFramesCoreTest(unittest.TestCase):
 
 class DouyinFramesRouterTest(unittest.TestCase):
     def _client(self, tmp: str) -> tuple[TestClient, sqlite3.Connection, str]:
-        conn = sqlite3.connect(":memory:", check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        init_schema(conn)
         app_root = Path(tmp) / "root"
         app_root.mkdir(parents=True, exist_ok=True)
+        # Use the real on-disk DB (as production does) so the dedicated
+        # connection the extract endpoint opens inside its worker thread sees
+        # the same schema and rows. A private ":memory:" DB cannot be shared
+        # across connections. The DB lives outside ``tmp`` so its open WAL
+        # handle doesn't block ``tmp`` cleanup on Windows; teardown closes the
+        # connection (registered last → runs first) before removing it.
+        db_dir = tempfile.mkdtemp()
+        config = replace(_make_config(app_root), data_path=str(Path(db_dir) / "data.db"))
+        conn = create_connection(config)
+        init_schema(conn)
+        self.addCleanup(shutil.rmtree, db_dir, ignore_errors=True)
+        self.addCleanup(conn.close)
         app = FastAPI()
         app.state.db = conn
-        app.state.config = _make_config(app_root)
+        app.state.config = config
         app.include_router(frames_router)
-        return TestClient(app), conn, str(app_root)
+        client = TestClient(app)
+        self.addCleanup(client.close)
+        return client, conn, str(app_root)
 
     def _seed(self, conn: sqlite3.Connection, local_path: str) -> str:
         source = upsert_douyin_source(conn, url="https://www.douyin.com/video/888")

@@ -48,6 +48,11 @@ from .transfer_ops import execute_transfer
 
 logger = logging.getLogger(__name__)
 
+# Cooldown before an errored auto-download file is retried. Without this an
+# errored file would be re-attempted every worker tick (10s), hammering the
+# source. Measured against the file's ``updated_at`` (epoch-ms).
+AUTO_ERROR_RETRY_MS = 5 * 60 * 1000
+
 
 class DouyinRuntime:
     def __init__(self) -> None:
@@ -111,6 +116,19 @@ async def emit_douyin_job(payload: dict[str, Any], *, session_id: str = "") -> N
 
 def _aweme_id_of(aweme: dict[str, Any]) -> str:
     return str(aweme.get("aweme_id") or aweme.get("group_id") or "").strip()
+
+
+def _aweme_is_pinned(aweme: dict[str, Any]) -> bool:
+    """Return True when the aweme is pinned ("top") on the user feed.
+
+    Douyin pins posts to the top of a feed, so they appear first even when
+    older than newer, unpinned posts. The flag is commonly ``is_top == 1`` but
+    may arrive as a string or other truthy value, so convert tolerantly.
+    """
+    try:
+        return bool(int(aweme.get("is_top") or 0))
+    except (TypeError, ValueError):
+        return bool(aweme.get("is_top"))
 
 
 async def discover_source(
@@ -181,7 +199,11 @@ async def discover_source(
                 existing_count += 1
                 # Incremental: awemes are newest-first; once we hit a known
                 # aweme the remainder is already known, so stop upserting.
-                if not backfill:
+                # Exception: Douyin pins ("top") posts to the head of a user
+                # feed, so the first item(s) are often old and already known.
+                # Skip those instead of breaking so the scan reaches genuinely
+                # new, unpinned posts further down.
+                if not backfill and not _aweme_is_pinned(aweme):
                     break
                 continue
 
@@ -549,11 +571,14 @@ async def _run_auto_download(app: FastAPI) -> None:
             SELECT unique_id
             FROM douyin_file
             WHERE source_id = ?
-              AND download_status IN ('idle', 'error')
+              AND (
+                download_status = 'idle'
+                OR (download_status = 'error' AND updated_at < ?)
+              )
             ORDER BY date DESC, id DESC
             LIMIT 3
             """,
-            (source_id,),
+            (source_id, now_ms() - AUTO_ERROR_RETRY_MS),
         ).fetchall()
         for row in result:
             start_download_task(app, str(row["unique_id"] or ""), session_id=f"douyin:{source_id}")

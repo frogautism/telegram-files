@@ -9,11 +9,9 @@ from typing import Any
 from .config import AppConfig
 from .douyin_assets import (
     asset_payload,
-    changed_assets,
     douyin_asset_bucket,
     is_douyin_asset,
     is_primary_asset,
-    snapshot_assets,
 )
 from .douyin_config import build_douyin_config, douyin_downloader_path
 
@@ -303,10 +301,19 @@ def _organize_downloaded_assets(
             for path in organized
             if path.is_file() and douyin_asset_bucket(path) in {"video", "live"}
         ]
-    newest = max(primary, key=lambda path: path.stat().st_mtime) if primary else None
+    # Stat each primary candidate once and reuse the result for both the
+    # newest-by-mtime selection and the reported size, guarding against files
+    # that vanish between listing and stat.
+    stated: list[tuple[Path, Any]] = []
+    for path in primary:
+        try:
+            stated.append((path, path.stat()))
+        except OSError:
+            continue
+    newest = max(stated, key=lambda item: item[1].st_mtime) if stated else None
     return {
-        "localPath": str(newest or ""),
-        "size": newest.stat().st_size if newest and newest.exists() else 0,
+        "localPath": str(newest[0]) if newest else "",
+        "size": newest[1].st_size if newest else 0,
         "assets": [asset_payload(path) for path in organized if path.exists()],
     }
 
@@ -352,7 +359,6 @@ async def download_aweme(
     reporter = BridgeProgressReporter(on_event or (lambda _event: None))
 
     base_path = Path(str(config_dict.get("path") or ""))
-    before_assets = snapshot_assets(base_path)
 
     async with imports["DouyinAPIClient"](cookies, proxy=proxy) as api_client:
         url_type = "live" if aweme.get("_douyin_live") else "video"
@@ -395,19 +401,24 @@ async def download_aweme(
     candidate_paths = [
         path for path in (Path(str(item)) for item in downloaded_files) if path.exists()
     ]
-    if not candidate_paths:
-        after_assets = snapshot_assets(base_path)
-        candidate_paths = changed_assets(before_assets, after_assets)
     aweme_id = str(aweme.get("aweme_id") or aweme.get("group_id") or "")
-    organized = _organize_downloaded_assets(
-        base_path,
-        aweme_id,
-        candidate_paths=candidate_paths,
-    )
+    organized: dict[str, Any] = {"localPath": "", "size": 0, "assets": []}
+    if candidate_paths:
+        # Common path: the downloader reported the exact files it wrote, so we
+        # only touch those paths and never walk the full library tree.
+        organized = await asyncio.to_thread(
+            _organize_downloaded_assets,
+            base_path,
+            aweme_id,
+            candidate_paths=candidate_paths,
+        )
     if not organized["localPath"]:
-        # Fall back to the historical aweme-id scan for compatibility with
-        # external overrides whose file mtimes may not change as expected.
-        organized = _organize_downloaded_assets(base_path, aweme_id)
+        # Fall back to the targeted aweme-id scan. This still only matches files
+        # whose name contains the aweme id rather than diffing the whole tree,
+        # and runs off the event loop to avoid blocking on the rglob.
+        organized = await asyncio.to_thread(
+            _organize_downloaded_assets, base_path, aweme_id
+        )
     if not organized["localPath"]:
         raise RuntimeError("Douyin media download finished but no local asset was found")
     return {
@@ -419,13 +430,12 @@ async def download_aweme(
 
 
 def metadata_from_row(row: Any) -> dict[str, Any]:
-    raw = row["metadata_json"] if row is not None and "metadata_json" in row.keys() else ""
+    try:
+        raw = row["metadata_json"]
+    except (IndexError, KeyError, TypeError):
+        raw = ""
     try:
         parsed = json.loads(str(raw or "{}"))
     except json.JSONDecodeError:
         parsed = {}
     return parsed if isinstance(parsed, dict) else {}
-
-
-async def run_blocking_json(func, *args, **kwargs):
-    return await asyncio.to_thread(func, *args, **kwargs)

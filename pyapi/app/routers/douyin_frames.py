@@ -5,11 +5,12 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import douyin_frames
+from ..db import create_connection
 from ..deps import get_db
 
 router = APIRouter(prefix="/douyin")
@@ -44,22 +45,30 @@ class FrameExtractPayload(BaseModel):
 @router.post("/file/{uniqueId}/frames/extract")
 async def douyin_extract_frames(
     uniqueId: str,
+    request: Request,
     payload: FrameExtractPayload | None = None,
-    db: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, Any]:
     payload = payload or FrameExtractPayload()
+    config = request.app.state.config
     try:
         options = payload.to_options()
-        result = await asyncio.to_thread(
-            douyin_frames.extract_frames,
-            db,
-            unique_id=uniqueId,
-            mode=options.mode,
-            interval=options.interval,
-            timestamp_ms=options.timestamp_ms,
-            max_frames=options.max_frames,
-            fmt=options.fmt,
-        )
+
+        def _run() -> dict[str, Any]:
+            conn = create_connection(config)
+            try:
+                return douyin_frames.extract_frames(
+                    conn,
+                    unique_id=uniqueId,
+                    mode=options.mode,
+                    interval=options.interval,
+                    timestamp_ms=options.timestamp_ms,
+                    max_frames=options.max_frames,
+                    fmt=options.fmt,
+                )
+            finally:
+                conn.close()
+
+        result = await asyncio.to_thread(_run)
     except ValueError as exc:
         message = str(exc)
         status = 404 if "not found" in message.lower() else 400
@@ -74,7 +83,7 @@ async def douyin_extract_frames(
 
 
 @router.get("/file/{uniqueId}/frames")
-def douyin_list_frames(
+async def douyin_list_frames(
     uniqueId: str,
     db: sqlite3.Connection = Depends(get_db),
 ) -> list[dict[str, Any]]:
@@ -82,7 +91,7 @@ def douyin_list_frames(
 
 
 @router.get("/file/{uniqueId}/frames/{frameId}")
-def douyin_get_frame(
+async def douyin_get_frame(
     uniqueId: str,
     frameId: int,
     db: sqlite3.Connection = Depends(get_db),
@@ -102,7 +111,7 @@ def douyin_get_frame(
 
 
 @router.delete("/file/{uniqueId}/frames")
-def douyin_delete_frames(
+async def douyin_delete_frames(
     uniqueId: str,
     db: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, int]:

@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import sqlite3
 import subprocess
 import tempfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 from .douyin_store import douyin_file_row, float_or_default, int_or_default, now_ms
+
+logger = logging.getLogger(__name__)
 
 VIDEO_TYPES = {"video"}
 FRAME_MODES = {"interval", "timestamp", "keyframe"}
@@ -49,7 +53,7 @@ def ffprobe_available() -> bool:
 
 def _lock_for_file(unique_id: str) -> Lock:
     normalized = unique_id.strip()
-    bucket = sum(normalized.encode("utf-8")) % len(_STRIPED_FRAME_LOCKS)
+    bucket = zlib.crc32(normalized.encode("utf-8")) % len(_STRIPED_FRAME_LOCKS)
     return _STRIPED_FRAME_LOCKS[bucket]
 
 
@@ -191,6 +195,20 @@ def _showinfo_timestamps(stderr: str) -> list[int]:
     return timestamps
 
 
+def _showinfo_dimensions(stderr: str) -> tuple[int, int]:
+    for line in stderr.splitlines():
+        if "pts_time:" not in line:
+            continue
+        for token in line.split():
+            if token.startswith("s:") and "x" in token:
+                w_str, _, h_str = token[2:].partition("x")
+                width = int_or_default(w_str.strip(), 0)
+                height = int_or_default(h_str.strip(), 0)
+                if width and height:
+                    return (width, height)
+    return (0, 0)
+
+
 def serialize_frame(row: sqlite3.Row) -> dict[str, Any]:
     frame_id = int_or_default(row["id"], 0)
     file_unique_id = str(row["file_unique_id"] or "")
@@ -234,11 +252,14 @@ def get_frame_row(
 
 def delete_frames(db: sqlite3.Connection, unique_id: str) -> int:
     rows = _frame_rows(db, unique_id)
+    parent_dirs: set[Path] = set()
     for row in rows:
         local_path = str(row["local_path"] or "").strip()
         if local_path:
+            path = Path(local_path)
+            parent_dirs.add(path.parent)
             try:
-                Path(local_path).unlink(missing_ok=True)
+                path.unlink(missing_ok=True)
             except OSError:
                 pass
     db.execute(
@@ -246,6 +267,11 @@ def delete_frames(db: sqlite3.Connection, unique_id: str) -> int:
         (unique_id.strip(),),
     )
     db.commit()
+    for parent in parent_dirs:
+        try:
+            parent.rmdir()
+        except OSError:
+            pass
     return len(rows)
 
 
@@ -371,7 +397,6 @@ def extract_frames(
             raise ValueError("Local video file is missing on disk.")
 
         aweme_id = str(row["aweme_id"] or "").strip() or "unknown"
-        dimensions = _probe_dimensions(video_path)
         out_dir = frames_dir_for(row)
         with tempfile.TemporaryDirectory(prefix=".extract-", dir=out_dir) as tmp:
             tmp_dir = Path(tmp)
@@ -396,10 +421,10 @@ def extract_frames(
                 sec = options.timestamp_ms / 1000.0
                 stderr = _run_ffmpeg(
                     [
-                        "-i",
-                        str(video_path),
                         "-ss",
                         str(sec),
+                        "-i",
+                        str(video_path),
                         "-vf",
                         "showinfo",
                         "-frames:v",
@@ -432,6 +457,10 @@ def extract_frames(
             if not produced:
                 raise RuntimeError("ffmpeg did not produce any frames")
 
+            dimensions = _showinfo_dimensions(stderr)
+            if dimensions == (0, 0):
+                dimensions = _probe_dimensions(video_path)
+
             timestamps = (
                 [options.timestamp_ms]
                 if options.mode == "timestamp"
@@ -444,6 +473,16 @@ def extract_frames(
                 out_dir=out_dir,
                 fmt=options.fmt,
             )
+
+            if options.mode != "timestamp" and len(timestamps) != len(final_paths):
+                logger.debug(
+                    "showinfo timestamp count mismatch: unique_id=%s mode=%s "
+                    "timestamps=%d frames=%d",
+                    unique_id,
+                    options.mode,
+                    len(timestamps),
+                    len(final_paths),
+                )
 
             try:
                 db.execute(
