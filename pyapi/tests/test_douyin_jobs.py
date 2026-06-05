@@ -140,11 +140,11 @@ class DouyinJobsTest(unittest.TestCase):
 
     def test_serialize_accepts_row_and_dict(self) -> None:
         conn = self._connection()
-        job = create_job(conn, kind="frame_extract")
+        job = create_job(conn, kind="batch_download")
         row = conn.execute(
             "SELECT * FROM douyin_job WHERE id = ?", (job["id"],)
         ).fetchone()
-        self.assertEqual(serialize_job(row)["kind"], "frame_extract")
+        self.assertEqual(serialize_job(row)["kind"], "batch_download")
 
 
 if __name__ == "__main__":

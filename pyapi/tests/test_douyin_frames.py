@@ -156,10 +156,11 @@ class DouyinFramesCoreTest(unittest.TestCase):
             original_run_ffmpeg = douyin_frames._run_ffmpeg
             douyin_frames.ffmpeg_path = lambda: "ffmpeg"
 
-            def fake_run_ffmpeg(args: list[str]) -> None:
+            def fake_run_ffmpeg(args: list[str], **_: object) -> str:
                 captured_args.append(args)
                 Path(args[-1].replace("%04d", "0001")).write_bytes(b"frame")
                 Path(args[-1].replace("%04d", "0002")).write_bytes(b"frame")
+                return "pts_time:0\npts_time:0.3\n"
 
             douyin_frames._run_ffmpeg = fake_run_ffmpeg
             try:
@@ -175,9 +176,41 @@ class DouyinFramesCoreTest(unittest.TestCase):
                 douyin_frames._run_ffmpeg = original_run_ffmpeg
 
             self.assertEqual(result["extracted"], 2)
-            self.assertIn("fps=1/0.3", captured_args[0])
+            self.assertIn("fps=1/0.3,showinfo", captured_args[0])
             self.assertEqual(result["frames"][0]["timestampMs"], 0)
             self.assertEqual(result["frames"][1]["timestampMs"], 300)
+
+    def test_keyframe_timestamps_come_from_ffmpeg_output(self) -> None:
+        conn = self._connection()
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "author" / "video" / "777.mp4"
+            video.parent.mkdir(parents=True, exist_ok=True)
+            video.write_bytes(b"x")
+            unique_id = self._seed_video(conn, str(video))
+            original_ffmpeg_path = douyin_frames.ffmpeg_path
+            original_run_ffmpeg = douyin_frames._run_ffmpeg
+            douyin_frames.ffmpeg_path = lambda: "ffmpeg"
+
+            def fake_run_ffmpeg(args: list[str], **_: object) -> str:
+                Path(args[-1].replace("%04d", "0001")).write_bytes(b"frame")
+                Path(args[-1].replace("%04d", "0002")).write_bytes(b"frame")
+                return "pts_time:0\npts_time:1.5\n"
+
+            douyin_frames._run_ffmpeg = fake_run_ffmpeg
+            try:
+                result = douyin_frames.extract_frames(
+                    conn,
+                    unique_id=unique_id,
+                    mode="keyframe",
+                    max_frames=2,
+                )
+            finally:
+                douyin_frames.ffmpeg_path = original_ffmpeg_path
+                douyin_frames._run_ffmpeg = original_run_ffmpeg
+
+            self.assertEqual(result["extracted"], 2)
+            self.assertEqual(result["frames"][0]["timestampMs"], 0)
+            self.assertEqual(result["frames"][1]["timestampMs"], 1500)
 
     def test_reextract_replaces_old_rows_and_files(self) -> None:
         conn = self._connection()
@@ -192,13 +225,14 @@ class DouyinFramesCoreTest(unittest.TestCase):
             douyin_frames.ffmpeg_path = lambda: "ffmpeg"
             produced_counts = iter([3, 1])
 
-            def fake_run_ffmpeg(args: list[str]) -> None:
+            def fake_run_ffmpeg(args: list[str], **_: object) -> str:
                 captured_args.append(args)
                 output_pattern = args[-1]
                 for index in range(1, next(produced_counts) + 1):
                     Path(output_pattern.replace("%04d", f"{index:04d}")).write_bytes(
                         b"frame"
                     )
+                return "pts_time:0\npts_time:1\npts_time:2\n"
 
             douyin_frames._run_ffmpeg = fake_run_ffmpeg
             try:
@@ -239,36 +273,20 @@ class DouyinFramesCoreTest(unittest.TestCase):
             self.assertFalse(first_paths[1].exists())
             self.assertFalse(first_paths[2].exists())
 
-    def test_max_frames_is_capped(self) -> None:
+    def test_max_frames_above_limit_is_rejected(self) -> None:
         conn = self._connection()
         with tempfile.TemporaryDirectory() as tmp:
             video = Path(tmp) / "author" / "video" / "777.mp4"
             video.parent.mkdir(parents=True, exist_ok=True)
             video.write_bytes(b"x")
             unique_id = self._seed_video(conn, str(video))
-            captured_args: list[list[str]] = []
-            original_ffmpeg_path = douyin_frames.ffmpeg_path
-            original_run_ffmpeg = douyin_frames._run_ffmpeg
-            douyin_frames.ffmpeg_path = lambda: "ffmpeg"
-
-            def fake_run_ffmpeg(args: list[str]) -> None:
-                captured_args.append(args)
-                Path(args[-1].replace("%04d", "0001")).write_bytes(b"frame")
-
-            douyin_frames._run_ffmpeg = fake_run_ffmpeg
-            try:
-                result = douyin_frames.extract_frames(
+            with self.assertRaises(ValueError):
+                douyin_frames.extract_frames(
                     conn,
                     unique_id=unique_id,
                     mode="interval",
                     max_frames=douyin_frames.MAX_FRAMES_LIMIT + 999,
                 )
-            finally:
-                douyin_frames.ffmpeg_path = original_ffmpeg_path
-                douyin_frames._run_ffmpeg = original_run_ffmpeg
-
-            self.assertEqual(result["extracted"], 1)
-            self.assertIn(str(douyin_frames.MAX_FRAMES_LIMIT), captured_args[0])
 
     def test_invalid_frame_format_is_rejected(self) -> None:
         conn = self._connection()
@@ -281,6 +299,62 @@ class DouyinFramesCoreTest(unittest.TestCase):
                 douyin_frames.extract_frames(
                     conn, unique_id=unique_id, mode="interval", fmt="gif"
                 )
+
+    def test_failed_reextract_preserves_old_rows_and_files(self) -> None:
+        conn = self._connection()
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "author" / "video" / "777.mp4"
+            video.parent.mkdir(parents=True, exist_ok=True)
+            video.write_bytes(b"x")
+            unique_id = self._seed_video(conn, str(video))
+            original_ffmpeg_path = douyin_frames.ffmpeg_path
+            original_run_ffmpeg = douyin_frames._run_ffmpeg
+            douyin_frames.ffmpeg_path = lambda: "ffmpeg"
+
+            def first_run(args: list[str], **_: object) -> str:
+                Path(args[-1].replace("%04d", "0001")).write_bytes(b"frame")
+                return "pts_time:0\n"
+
+            def failing_run(args: list[str], **_: object) -> str:
+                raise RuntimeError("boom")
+
+            try:
+                douyin_frames._run_ffmpeg = first_run
+                first = douyin_frames.extract_frames(
+                    conn,
+                    unique_id=unique_id,
+                    mode="interval",
+                    interval=1,
+                    max_frames=1,
+                )
+                old_frame_path = Path(
+                    conn.execute(
+                        "SELECT local_path FROM douyin_frame WHERE file_unique_id = ?",
+                        (unique_id,),
+                    ).fetchone()["local_path"]
+                )
+
+                douyin_frames._run_ffmpeg = failing_run
+                with self.assertRaises(RuntimeError):
+                    douyin_frames.extract_frames(
+                        conn,
+                        unique_id=unique_id,
+                        mode="interval",
+                        interval=1,
+                        max_frames=1,
+                    )
+            finally:
+                douyin_frames.ffmpeg_path = original_ffmpeg_path
+                douyin_frames._run_ffmpeg = original_run_ffmpeg
+
+            rows = conn.execute(
+                "SELECT local_path FROM douyin_frame WHERE file_unique_id = ?",
+                (unique_id,),
+            ).fetchall()
+            self.assertEqual(first["extracted"], 1)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(Path(rows[0]["local_path"]), old_frame_path)
+            self.assertTrue(old_frame_path.exists())
 
     def test_remove_download_deletes_frames(self) -> None:
         conn = self._connection()
@@ -359,6 +433,24 @@ class DouyinFramesCoreTest(unittest.TestCase):
             self.assertEqual(count, result2["extracted"])
             self.assertTrue(len(old_paths) > 0)
 
+    @unittest.skipUnless(douyin_frames.ffmpeg_available(), "ffmpeg not available")
+    def test_timestamp_extraction_records_requested_timestamp(self) -> None:
+        conn = self._connection()
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "author" / "video" / "777.mp4"
+            self.assertTrue(_make_test_video(video))
+            unique_id = self._seed_video(conn, str(video))
+
+            result = douyin_frames.extract_frames(
+                conn,
+                unique_id=unique_id,
+                mode="timestamp",
+                timestamp_ms=1000,
+            )
+
+            self.assertEqual(result["extracted"], 1)
+            self.assertEqual(result["frames"][0]["timestampMs"], 1000)
+
 
 class DouyinFramesRouterTest(unittest.TestCase):
     def _client(self, tmp: str) -> tuple[TestClient, sqlite3.Connection, str]:
@@ -416,16 +508,11 @@ class DouyinFramesRouterTest(unittest.TestCase):
                 json={"mode": "interval"},
             )
             self.assertEqual(resp.status_code, 400)
-            # job row recorded as failed
-            job = conn.execute(
-                "SELECT state, kind, total, success, failed FROM douyin_job WHERE file_unique_id = ?",
+            job_count = conn.execute(
+                "SELECT COUNT(*) FROM douyin_job WHERE file_unique_id = ?",
                 (record["uniqueId"],),
-            ).fetchone()
-            self.assertEqual(job["state"], "failed")
-            self.assertEqual(job["kind"], "frame_extract")
-            self.assertEqual(job["total"], 60)
-            self.assertEqual(job["success"], 0)
-            self.assertEqual(job["failed"], 1)
+            ).fetchone()[0]
+            self.assertEqual(job_count, 0)
 
     def test_extract_rejects_replace_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -454,7 +541,7 @@ class DouyinFramesRouterTest(unittest.TestCase):
                     "maxFrames": douyin_frames.MAX_FRAMES_LIMIT + 1,
                 },
             )
-            self.assertEqual(resp.status_code, 422)
+            self.assertEqual(resp.status_code, 400)
 
     def test_get_missing_frame_returns_404(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -480,14 +567,11 @@ class DouyinFramesRouterTest(unittest.TestCase):
             )
             self.assertEqual(resp.status_code, 200, resp.text)
             body = resp.json()
-            self.assertIn("jobId", body)
+            self.assertNotIn("jobId", body)
             self.assertGreater(body["extracted"], 0)
             frame_id = body["frames"][0]["id"]
-
-            job = conn.execute(
-                "SELECT state FROM douyin_job WHERE id = ?", (body["jobId"],)
-            ).fetchone()
-            self.assertEqual(job["state"], "completed")
+            job_count = conn.execute("SELECT COUNT(*) FROM douyin_job").fetchone()[0]
+            self.assertEqual(job_count, 0)
 
             img = client.get(f"/douyin/file/{unique_id}/frames/{frame_id}")
             self.assertEqual(img.status_code, 200)

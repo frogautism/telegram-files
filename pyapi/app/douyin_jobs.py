@@ -10,8 +10,6 @@ JOB_KINDS = {
     "source_refresh",
     "file_download",
     "batch_download",
-    "frame_extract",
-    "batch_frame_extract",
 }
 JOB_STATES = {"queued", "running", "completed", "failed", "cancelled"}
 _TERMINAL_STATES = {"completed", "failed", "cancelled"}

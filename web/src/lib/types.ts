@@ -277,9 +277,7 @@ export type DouyinSource = {
 export type DouyinJobKind =
   | "source_refresh"
   | "file_download"
-  | "batch_download"
-  | "frame_extract"
-  | "batch_frame_extract";
+  | "batch_download";
 export type DouyinJobState =
   | "queued"
   | "running"

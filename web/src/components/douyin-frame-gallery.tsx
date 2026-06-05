@@ -30,7 +30,6 @@ import useSWR from "swr";
 type ExtractMode = "interval" | "timestamp" | "keyframe";
 
 type ExtractResult = {
-  jobId: string;
   extracted: number;
   frames: DouyinFrame[];
 };

@@ -23,8 +23,6 @@ const KIND_LABELS: Record<string, string> = {
   source_refresh: "Refresh",
   file_download: "Download",
   batch_download: "Batch download",
-  frame_extract: "Frames",
-  batch_frame_extract: "Batch frames",
 };
 
 function canCancelJob(job: DouyinJob) {
