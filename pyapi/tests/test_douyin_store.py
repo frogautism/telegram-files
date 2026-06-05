@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from app.db import init_schema
+from app.douyin_asset_store import sync_douyin_downloaded_assets
 from app.douyin_store import (
     delete_douyin_source,
     douyin_aweme_exists,
@@ -59,8 +60,19 @@ class DouyinStoreTest(unittest.TestCase):
     def test_status_remove_and_transfer_candidate_flow(self) -> None:
         conn = self._connection()
         with tempfile.TemporaryDirectory() as temp_dir:
-            path = Path(temp_dir) / "123.mp4"
+            author_dir = Path(temp_dir) / "author"
+            path = author_dir / "video" / "123.mp4"
+            cover = author_dir / "thumbnail" / "123_cover.jpg"
+            music = author_dir / "music" / "123_music.mp3"
+            metadata = author_dir / "json" / "123_data.json"
+            path.parent.mkdir(parents=True)
+            cover.parent.mkdir(parents=True)
+            music.parent.mkdir(parents=True)
+            metadata.parent.mkdir(parents=True)
             path.write_bytes(b"abc")
+            cover.write_bytes(b"cover")
+            music.write_bytes(b"music")
+            metadata.write_text("{}", encoding="utf-8")
             source = upsert_douyin_source(conn, url="https://www.douyin.com/video/123")
             record = upsert_douyin_aweme(
                 conn,
@@ -89,6 +101,47 @@ class DouyinStoreTest(unittest.TestCase):
             removed = remove_douyin_download(conn, unique_id)
             self.assertEqual(removed["downloadStatus"], "idle")
             self.assertFalse(path.exists())
+            self.assertFalse(cover.exists())
+            self.assertFalse(music.exists())
+            self.assertFalse(metadata.exists())
+
+    def test_sync_downloaded_assets_creates_rows_for_extra_gallery_media(self) -> None:
+        conn = self._connection()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            first = base / "author" / "video" / "123_1.jpg"
+            second = base / "author" / "video" / "123_2.jpg"
+            first.parent.mkdir(parents=True)
+            first.write_bytes(b"one")
+            second.write_bytes(b"two")
+            source = upsert_douyin_source(conn, url="https://www.douyin.com/note/123")
+            record = upsert_douyin_aweme(
+                conn,
+                source_id=source["id"],
+                aweme={"aweme_id": "123", "image_post_info": {"images": [{}]}},
+            )
+
+            sync_douyin_downloaded_assets(
+                conn,
+                primary_unique_id=record["uniqueId"],
+                assets=[
+                    {"path": str(first), "bucket": "video", "size": 3},
+                    {"path": str(second), "bucket": "video", "size": 3},
+                ],
+            )
+
+            files = list_douyin_files(
+                conn,
+                source_id=source["id"],
+                filters={"sort": "date", "order": "asc", "limit": "10"},
+            )["files"]
+            self.assertEqual(
+                sorted(file["uniqueId"] for file in files),
+                ["douyin:123:asset:1", "douyin:123:primary:0"],
+            )
+            extra = [file for file in files if file["uniqueId"] == "douyin:123:asset:1"][0]
+            self.assertEqual(extra["type"], "photo")
+            self.assertEqual(extra["localPath"], str(second))
 
     def test_auto_settings_are_source_scoped(self) -> None:
         conn = self._connection()

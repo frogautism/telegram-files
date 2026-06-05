@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .douyin_assets import sibling_asset_paths, unlink_asset_paths
+
 
 def now_ms() -> int:
     return int(time.time() * 1000)
@@ -388,7 +390,7 @@ def delete_douyin_source(
         return {"deleted": False, "removedFiles": 0}
 
     file_rows = db.execute(
-        "SELECT id, unique_id, local_path FROM douyin_file WHERE source_id = ?",
+        "SELECT id, unique_id, aweme_id, local_path FROM douyin_file WHERE source_id = ?",
         (sid,),
     ).fetchall()
     frame_rows = db.execute(
@@ -406,12 +408,12 @@ def delete_douyin_source(
     if delete_files:
         for file_row in file_rows:
             local_path = str(file_row["local_path"] or "").strip()
-            if not local_path:
-                continue
-            try:
-                Path(local_path).unlink(missing_ok=True)
-            except OSError:
-                pass
+            unlink_asset_paths(
+                sibling_asset_paths(
+                    local_path,
+                    str(file_row["aweme_id"] or ""),
+                )
+            )
         for frame_row in frame_rows:
             local_path = str(frame_row["local_path"] or "").strip()
             if not local_path:
@@ -897,11 +899,7 @@ def remove_douyin_download(db: sqlite3.Connection, unique_id: str) -> dict[str, 
     if row is None:
         return None
     local_path = str(row["local_path"] or "")
-    if local_path:
-        try:
-            Path(local_path).unlink(missing_ok=True)
-        except OSError:
-            pass
+    unlink_asset_paths(sibling_asset_paths(local_path, str(row["aweme_id"] or "")))
     db.execute(
         """
         UPDATE douyin_file
@@ -984,6 +982,9 @@ def douyin_file_for_transfer(
     row = douyin_file_row(db, unique_id=unique_id)
     if row is None:
         return None
+    local_path = str(row["local_path"] or "")
+    if not local_path or not Path(local_path).exists():
+        return None
     return {
         "id": int_or_default(row["id"], 0),
         "unique_id": str(row["unique_id"] or ""),
@@ -992,7 +993,7 @@ def douyin_file_for_transfer(
         "type": str(row["type"] or "file"),
         "file_name": str(row["file_name"] or ""),
         "caption": str(row["caption"] or ""),
-        "local_path": str(row["local_path"] or ""),
+        "local_path": local_path,
     }
 
 

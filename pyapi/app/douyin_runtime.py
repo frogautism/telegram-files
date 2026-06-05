@@ -14,8 +14,10 @@ from .app_state import (
     _emit_ws_payload,
 )
 from .config import AppConfig
+from .douyin_asset_store import sync_douyin_downloaded_assets
 from .douyin_bridge import discover_awemes, download_aweme, metadata_from_row
 from .douyin_jobs import (
+    active_job_for_file,
     create_job,
     get_job,
     update_job,
@@ -36,6 +38,7 @@ from .douyin_store import (
     record_source_refresh_start,
     remove_douyin_download,
     serialize_douyin_file,
+    source_id_for_url,
     update_douyin_file_status,
     update_douyin_transfer_status,
     upsert_douyin_aweme,
@@ -49,19 +52,23 @@ logger = logging.getLogger(__name__)
 class DouyinRuntime:
     def __init__(self) -> None:
         self.tasks: dict[str, asyncio.Task] = {}
-        self.cancelled: set[str] = set()
+        self.cancel_actions: dict[str, str] = {}
         # Map unique_id -> active job id for single-file downloads.
         self.file_jobs: dict[str, str] = {}
+        self.refreshing_sources: set[str] = set()
 
-    def cancel(self, unique_id: str) -> None:
-        self.cancelled.add(unique_id)
+    def cancel(self, unique_id: str, *, remove: bool = False) -> None:
+        self.cancel_actions[unique_id] = "remove" if remove else "pause"
         task = self.tasks.get(unique_id)
         if task is not None:
             task.cancel()
 
+    def cancel_action(self, unique_id: str) -> str:
+        return self.cancel_actions.get(unique_id, "")
+
     def forget(self, unique_id: str) -> None:
         self.tasks.pop(unique_id, None)
-        self.cancelled.discard(unique_id)
+        self.cancel_actions.pop(unique_id, None)
         self.file_jobs.pop(unique_id, None)
 
 
@@ -117,6 +124,16 @@ async def discover_source(
 ) -> dict[str, Any]:
     db: sqlite3.Connection = app.state.db
     config: AppConfig = app.state.config
+    source_id = str(source_id or source_id_for_url(url))
+    runtime = runtime_from_app(app)
+    if source_id in runtime.refreshing_sources:
+        refreshed = get_douyin_source(db, source_id)
+        result = dict(refreshed or {"id": source_id, "url": url})
+        result.update(
+            {"discovered": 0, "new": 0, "existing": 0, "failed": 0, "jobId": ""}
+        )
+        return result
+    runtime.refreshing_sources.add(source_id)
     source = upsert_douyin_source(
         db, url=url, status="discovering", source_id=source_id
     )
@@ -244,6 +261,8 @@ async def discover_source(
         if failed_job is not None:
             await emit_douyin_job(failed_job)
         raise
+    finally:
+        runtime.refreshing_sources.discard(source_id)
 
 
 def start_download_task(
@@ -269,7 +288,7 @@ def start_download_task(
         download_status="downloading",
         downloaded_size=0,
     )
-    runtime.cancelled.discard(unique_id)
+    runtime.cancel_actions.pop(unique_id, None)
     job = create_job(
         db,
         kind="file_download",
@@ -362,12 +381,21 @@ async def _download_file_task(app: FastAPI, unique_id: str, *, session_id: str =
                 logger.debug("Douyin job progress update failed", exc_info=True)
 
         result = await download_aweme(config, db, aweme, on_event=_on_bridge_event)
-        if unique_id in runtime.cancelled:
-            await _emit_current("paused")
+        action = runtime.cancel_action(unique_id)
+        if action:
+            if action != "remove":
+                await _emit_current("paused")
             await _emit_job(state="cancelled", step="cancelled")
             return
         local_path = str(result.get("localPath") or "")
         size = int(result.get("size") or 0)
+        if not local_path:
+            raise RuntimeError("Douyin media download finished without a local file")
+        sync_douyin_downloaded_assets(
+            db,
+            primary_unique_id=unique_id,
+            assets=result.get("assets") if isinstance(result.get("assets"), list) else [],
+        )
         await _emit_current(
             "completed",
             local_path=local_path,
@@ -376,7 +404,8 @@ async def _download_file_task(app: FastAPI, unique_id: str, *, session_id: str =
         )
         await _emit_job(state="completed", success=1, step="completed")
     except asyncio.CancelledError:
-        await _emit_current("paused")
+        if runtime.cancel_action(unique_id) != "remove":
+            await _emit_current("paused")
         await _emit_job(state="cancelled", step="cancelled")
     except Exception as exc:
         logger.warning("Douyin download failed unique=%s: %s", unique_id, exc)
@@ -389,7 +418,7 @@ async def _download_file_task(app: FastAPI, unique_id: str, *, session_id: str =
 async def cancel_download(app: FastAPI, unique_id: str, *, remove: bool = False) -> dict[str, Any] | None:
     db: sqlite3.Connection = app.state.db
     runtime = runtime_from_app(app)
-    runtime.cancel(unique_id)
+    runtime.cancel(unique_id, remove=remove)
     if remove:
         payload = remove_douyin_download(db, unique_id)
     else:
@@ -448,7 +477,7 @@ async def retry_job(app: FastAPI, job_id: str) -> dict[str, Any] | None:
         if not file_unique_id:
             return job
         start_download_task(app, file_unique_id)
-        return get_job(db, job_id) or job
+        return active_job_for_file(db, file_unique_id) or get_job(db, job_id) or job
     if kind == "source_refresh":
         source_id = str(job.get("sourceId") or "")
         source = get_douyin_source(db, source_id) if source_id else None

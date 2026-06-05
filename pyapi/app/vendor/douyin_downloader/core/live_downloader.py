@@ -56,6 +56,7 @@ _FLV_QUALITY_ORDER = {
 class LiveDownloader(BaseDownloader):
     async def download(self, parsed_url: Dict[str, Any]) -> DownloadResult:
         result = DownloadResult()
+        self.last_downloaded_files = []
 
         room_id = parsed_url.get("room_id")
         if not room_id:
@@ -134,6 +135,9 @@ class LiveDownloader(BaseDownloader):
         )
 
         if ok:
+            self.last_downloaded_files = [
+                path for path in (target_path, meta_path) if path.exists()
+            ]
             result.success += 1
             self._progress_advance_item("success", str(room_id))
             logger.info("Live recording finished: %s", target_path)

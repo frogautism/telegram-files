@@ -7,6 +7,14 @@ from pathlib import Path
 from typing import Any
 
 from .config import AppConfig
+from .douyin_assets import (
+    asset_payload,
+    changed_assets,
+    douyin_asset_bucket,
+    is_douyin_asset,
+    is_primary_asset,
+    snapshot_assets,
+)
 from .douyin_config import build_douyin_config, douyin_downloader_path
 
 
@@ -238,11 +246,6 @@ def _progress_detail(value: Any) -> str:
     return text[:200]
 
 
-_PRIMARY_MEDIA_SUFFIXES = {".mp4", ".mov", ".m4v", ".jpg", ".jpeg", ".png", ".webp", ".gif"}
-_MUSIC_SUFFIXES = {".mp3", ".m4a", ".aac", ".wav"}
-_JSON_SUFFIXES = {".json"}
-
-
 def _replace_path(source: Path, target: Path) -> Path:
     if source == target:
         return target
@@ -253,41 +256,25 @@ def _replace_path(source: Path, target: Path) -> Path:
     return target
 
 
-def _douyin_asset_bucket(path: Path) -> str:
-    name = path.name.lower()
-    suffix = path.suffix.lower()
-    if suffix in _JSON_SUFFIXES:
-        return "json"
-    if suffix in _MUSIC_SUFFIXES or name.endswith("_music.mp3"):
-        return "music"
-    if (
-        name.endswith("_cover.jpg")
-        or name.endswith("_cover.jpeg")
-        or name.endswith("_cover.png")
-        or name.endswith("_cover.webp")
-        or name.endswith("_avatar.jpg")
-        or name.endswith("_avatar.jpeg")
-        or name.endswith("_avatar.png")
-        or name.endswith("_avatar.webp")
-    ):
-        return "thumbnail"
-    return "video"
-
-
-def _organize_downloaded_assets(base_path: Path, aweme_id: str) -> dict[str, Any]:
+def _organize_downloaded_assets(
+    base_path: Path,
+    aweme_id: str,
+    *,
+    candidate_paths: list[Path] | None = None,
+) -> dict[str, Any]:
     if not base_path.exists() or not aweme_id:
-        return {"localPath": "", "size": 0}
+        return {"localPath": "", "size": 0, "assets": []}
 
-    matches = [
-        path
-        for path in base_path.rglob(f"*{aweme_id}*")
-        if path.is_file()
-        and not path.name.endswith(".tmp")
-        and path.name != "download_manifest.jsonl"
-        and path.suffix.lower() in (_PRIMARY_MEDIA_SUFFIXES | _MUSIC_SUFFIXES | _JSON_SUFFIXES)
-    ]
+    if candidate_paths is None:
+        matches = [
+            path
+            for path in base_path.rglob(f"*{aweme_id}*")
+            if is_douyin_asset(path)
+        ]
+    else:
+        matches = [path for path in candidate_paths if is_douyin_asset(path)]
     if not matches:
-        return {"localPath": "", "size": 0}
+        return {"localPath": "", "size": 0, "assets": []}
 
     organized: list[Path] = []
     for path in sorted(matches, key=lambda item: len(item.parts)):
@@ -298,7 +285,7 @@ def _organize_downloaded_assets(base_path: Path, aweme_id: str) -> dict[str, Any
         if not relative.parts:
             continue
         author_dir = relative.parts[0]
-        bucket = _douyin_asset_bucket(path)
+        bucket = douyin_asset_bucket(path)
         target = base_path / author_dir / bucket / path.name
         try:
             organized.append(_replace_path(path, target))
@@ -308,22 +295,19 @@ def _organize_downloaded_assets(base_path: Path, aweme_id: str) -> dict[str, Any
     primary = [
         path
         for path in organized
-        if path.is_file()
-        and path.parent.name == "video"
-        and path.suffix.lower() in _PRIMARY_MEDIA_SUFFIXES
-        and not path.name.lower().endswith(("_cover.jpg", "_cover.jpeg", "_cover.png", "_cover.webp"))
-        and "_avatar" not in path.name.lower()
+        if path.is_file() and is_primary_asset(path)
     ]
     if not primary:
         primary = [
             path
             for path in organized
-            if path.is_file() and path.suffix.lower() in _PRIMARY_MEDIA_SUFFIXES
+            if path.is_file() and douyin_asset_bucket(path) in {"video", "live"}
         ]
     newest = max(primary, key=lambda path: path.stat().st_mtime) if primary else None
     return {
         "localPath": str(newest or ""),
         "size": newest.stat().st_size if newest and newest.exists() else 0,
+        "assets": [asset_payload(path) for path in organized if path.exists()],
     }
 
 
@@ -367,6 +351,9 @@ async def download_aweme(
     queue_manager = imports["QueueManager"](max_workers=int(cfg.get("thread", 3) or 3))
     reporter = BridgeProgressReporter(on_event or (lambda _event: None))
 
+    base_path = Path(str(config_dict.get("path") or ""))
+    before_assets = snapshot_assets(base_path)
+
     async with imports["DouyinAPIClient"](cookies, proxy=proxy) as api_client:
         url_type = "live" if aweme.get("_douyin_live") else "video"
         downloader = imports["DownloaderFactory"].create(
@@ -388,21 +375,46 @@ async def download_aweme(
             if int(getattr(result, "success", 0) or 0) <= 0:
                 raise RuntimeError("Douyin live recording failed")
         else:
-            ok = await downloader._download_aweme_assets(
-                aweme,
-                str((aweme.get("author") or {}).get("nickname") or "douyin"),
-                mode="video",
-            )
+            download_assets = getattr(downloader, "download_aweme_assets", None)
+            if callable(download_assets):
+                ok = await download_assets(
+                    aweme,
+                    str((aweme.get("author") or {}).get("nickname") or "douyin"),
+                    mode="video",
+                )
+            else:
+                ok = await downloader._download_aweme_assets(
+                    aweme,
+                    str((aweme.get("author") or {}).get("nickname") or "douyin"),
+                    mode="video",
+                )
             if not ok:
                 raise RuntimeError("Douyin media download failed")
 
-    base_path = Path(str(config_dict.get("path") or ""))
+    downloaded_files = getattr(downloader, "last_downloaded_files", [])
+    candidate_paths = [
+        path for path in (Path(str(item)) for item in downloaded_files) if path.exists()
+    ]
+    if not candidate_paths:
+        after_assets = snapshot_assets(base_path)
+        candidate_paths = changed_assets(before_assets, after_assets)
     aweme_id = str(aweme.get("aweme_id") or aweme.get("group_id") or "")
-    organized = _organize_downloaded_assets(base_path, aweme_id)
+    organized = _organize_downloaded_assets(
+        base_path,
+        aweme_id,
+        candidate_paths=candidate_paths,
+    )
+    if not organized["localPath"]:
+        # Fall back to the historical aweme-id scan for compatibility with
+        # external overrides whose file mtimes may not change as expected.
+        organized = _organize_downloaded_assets(base_path, aweme_id)
+    if not organized["localPath"]:
+        raise RuntimeError("Douyin media download finished but no local asset was found")
     return {
         "aweme": aweme,
         "localPath": organized["localPath"],
         "size": organized["size"],
+        "assets": organized["assets"],
     }
 
 

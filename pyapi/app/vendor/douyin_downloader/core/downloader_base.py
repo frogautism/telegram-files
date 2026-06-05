@@ -68,6 +68,7 @@ class BaseDownloader(ABC):
         self.progress_reporter = progress_reporter
         self.metadata_handler = MetadataHandler()
         self.transcript_manager = TranscriptManager(self.config, self.file_manager, self.database)
+        self.last_downloaded_files: List[Path] = []
         self._local_aweme_ids: Optional[set[str]] = None
         self._aweme_id_pattern = re.compile(r"(?<!\d)(\d{15,20})(?!\d)")
         self._local_media_suffixes = {
@@ -250,6 +251,7 @@ class BaseDownloader(ABC):
         *,
         db_batch: Optional[List[Dict[str, Any]]] = None,
     ) -> bool:
+        self.last_downloaded_files = []
         aweme_id = aweme_data.get("aweme_id")
         if not aweme_id:
             logger.error("Missing aweme_id in aweme data")
@@ -498,8 +500,24 @@ class BaseDownloader(ABC):
                 )
 
         self._mark_local_aweme_downloaded(aweme_id)
+        self.last_downloaded_files = downloaded_files
         logger.info("Downloaded %s: %s (%s)", media_type, desc, aweme_id)
         return True
+
+    async def download_aweme_assets(
+        self,
+        aweme_data: Dict[str, Any],
+        author_name: str,
+        mode: Optional[str] = None,
+        *,
+        db_batch: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        return await self._download_aweme_assets(
+            aweme_data,
+            author_name,
+            mode,
+            db_batch=db_batch,
+        )
 
     async def _download_with_retry(
         self,

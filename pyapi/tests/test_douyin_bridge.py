@@ -91,6 +91,20 @@ class DouyinBridgeTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((base / "author" / "music" / music.name).exists())
             self.assertTrue((base / "author" / "json" / metadata.name).exists())
 
+    def test_organize_downloaded_assets_accepts_live_recording_suffix(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            source_dir = base / "host" / "live" / "2026_live_777"
+            source_dir.mkdir(parents=True)
+            live = source_dir / "2026_live_777.flv"
+            live.write_bytes(b"flv")
+
+            result = _organize_downloaded_assets(base, "777")
+
+            self.assertEqual(result["localPath"], str(base / "host" / "video" / live.name))
+            self.assertEqual(result["size"], 3)
+            self.assertEqual(result["assets"][0]["bucket"], "video")
+
 
 def _make_app_config(downloader_path: str = "") -> AppConfig:
     return AppConfig(
