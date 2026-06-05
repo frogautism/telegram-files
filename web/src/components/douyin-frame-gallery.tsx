@@ -162,10 +162,10 @@ export function DouyinFrameGalleryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] w-[min(96vw,1120px)] max-w-[min(96vw,1120px)] flex-col gap-0 overflow-hidden p-0">
+      <DialogContent className="flex h-[min(880px,92vh)] w-[min(96vw,1200px)] max-w-[min(96vw,1200px)] flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="shrink-0 space-y-1 border-b border-border px-5 py-4 pr-12 text-left sm:px-6">
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand/10 text-brand">
+          <DialogTitle className="flex items-center gap-2.5 text-base">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand to-brand/70 text-brand-foreground shadow-sm shadow-brand/30">
               <Film className="h-4 w-4" />
             </span>
             Douyin video frames
@@ -178,7 +178,7 @@ export function DouyinFrameGalleryDialog({
 
         {/* Extraction toolbar */}
         <div className="shrink-0 border-b border-border bg-muted/30 px-5 py-3 sm:px-6">
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
             <Field label="Mode">
               <Select
                 value={mode}
@@ -235,7 +235,7 @@ export function DouyinFrameGalleryDialog({
             <Button
               onClick={() => void handleExtract()}
               disabled={extracting}
-              className="ml-auto"
+              className="ml-auto shadow-sm shadow-brand/20"
             >
               {extracting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -251,9 +251,9 @@ export function DouyinFrameGalleryDialog({
         <div className="min-h-0 flex-1 overflow-y-auto lg:overflow-hidden">
           {!hasFrames ? (
             <div className="flex h-full min-h-[320px] items-center justify-center p-6">
-              <div className="max-w-sm space-y-2 text-center">
-                <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-dashed border-border-strong text-muted-foreground/70">
-                  <Images className="h-5 w-5" />
+              <div className="max-w-sm space-y-3 text-center">
+                <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-dashed border-border-strong bg-muted/40 text-muted-foreground/70">
+                  <Images className="h-6 w-6" />
                 </span>
                 <p className="text-sm font-medium">No frames yet</p>
                 <p className="text-sm text-muted-foreground">
@@ -262,65 +262,81 @@ export function DouyinFrameGalleryDialog({
               </div>
             </div>
           ) : (
-            <div className="grid min-h-0 lg:h-full lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="grid min-h-0 lg:h-full lg:grid-cols-[minmax(0,1fr)_320px]">
               {/* Preview + scrubber */}
-              <section className="flex min-h-0 flex-col gap-3 p-5 sm:p-6">
-                <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-lg border border-border bg-black">
+              <section className="flex min-h-0 flex-col gap-4 p-5 sm:p-6">
+                {/* Stage — object-contain in an absolutely filled layer can
+                    never overflow, so portrait or landscape frames always fit
+                    fully without cropping. */}
+                <div className="relative min-h-[280px] flex-1 overflow-hidden rounded-xl bg-gradient-to-b from-zinc-900 to-zinc-950 shadow-inner ring-1 ring-white/5">
+                  {/* soft glow behind the frame */}
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,_hsl(var(--brand)/0.12),_transparent_70%)]"
+                  />
                   {selectedFrame && (
-                    <>
+                    <div className="absolute inset-0 flex items-center justify-center p-4 sm:p-6">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         key={selectedFrame.id}
                         src={frameSrc(selectedFrame)}
                         alt={`Selected frame ${selectedFrame.frameIndex}`}
-                        className="h-full max-h-[52vh] w-full object-contain"
+                        className="max-h-full max-w-full rounded-md object-contain shadow-2xl shadow-black/50"
                       />
-                      <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-md bg-black/55 px-2 py-1 font-mono text-[11px] text-white backdrop-blur-sm">
-                        <span>#{selectedFrameIndex + 1}</span>
-                        <span className="text-white/50">·</span>
-                        <span>{formatTimestamp(selectedFrame.timestampMs)}</span>
+                    </div>
+                  )}
+
+                  {/* Frame badge */}
+                  {selectedFrame && (
+                    <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-lg bg-black/55 px-2.5 py-1 font-mono text-[11px] text-white shadow-sm backdrop-blur-md">
+                      <span className="font-semibold">
+                        #{selectedFrameIndex + 1}
                       </span>
+                      <span className="text-white/40">·</span>
+                      <span className="text-white/80">
+                        {formatTimestamp(selectedFrame.timestampMs)}
+                      </span>
+                    </span>
+                  )}
+
+                  {/* Floating nav arrows */}
+                  {frames.length > 1 && (
+                    <>
+                      <StageNav
+                        side="left"
+                        onClick={() => goToIndex(selectedFrameIndex - 1)}
+                        disabled={atFirst}
+                        label="Previous frame"
+                      >
+                        <ChevronLeft className="h-5 w-5" />
+                      </StageNav>
+                      <StageNav
+                        side="right"
+                        onClick={() => goToIndex(selectedFrameIndex + 1)}
+                        disabled={atLast}
+                        label="Next frame"
+                      >
+                        <ChevronRight className="h-5 w-5" />
+                      </StageNav>
                     </>
                   )}
                 </div>
 
                 {/* Scrubber */}
-                <div className="flex items-center gap-3">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-9 w-9 shrink-0"
-                    onClick={() => goToIndex(selectedFrameIndex - 1)}
-                    disabled={atFirst}
-                    aria-label="Previous frame"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <div className="flex flex-1 items-center gap-3">
-                    <Slider
-                      value={[selectedFrameIndex]}
-                      min={0}
-                      max={Math.max(0, frames.length - 1)}
-                      step={1}
-                      disabled={frames.length <= 1}
-                      onValueChange={(value) => goToIndex(value[0] ?? 0)}
-                      aria-label="Selected frame"
-                      className="flex-1"
-                    />
-                    <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground tabular-nums">
-                      {selectedFrameIndex + 1} / {frames.length}
-                    </span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    className="h-9 w-9 shrink-0"
-                    onClick={() => goToIndex(selectedFrameIndex + 1)}
-                    disabled={atLast}
-                    aria-label="Next frame"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
+                <div className="flex shrink-0 items-center gap-4">
+                  <Slider
+                    value={[selectedFrameIndex]}
+                    min={0}
+                    max={Math.max(0, frames.length - 1)}
+                    step={1}
+                    disabled={frames.length <= 1}
+                    onValueChange={(value) => goToIndex(value[0] ?? 0)}
+                    aria-label="Selected frame"
+                    className="flex-1"
+                  />
+                  <span className="shrink-0 whitespace-nowrap font-mono text-xs text-muted-foreground tabular-nums">
+                    {selectedFrameIndex + 1} / {frames.length}
+                  </span>
                 </div>
 
                 {/* Metadata */}
@@ -355,7 +371,7 @@ export function DouyinFrameGalleryDialog({
               </section>
 
               {/* Filmstrip */}
-              <section className="flex min-h-0 flex-col border-t border-border lg:border-l lg:border-t-0">
+              <section className="flex min-h-0 flex-col border-t border-border bg-muted/20 lg:border-l lg:border-t-0">
                 <div className="flex shrink-0 items-center justify-between gap-2 px-4 py-3">
                   <h3 className="flex items-center gap-2 text-sm font-medium">
                     Frames
@@ -379,7 +395,7 @@ export function DouyinFrameGalleryDialog({
                   </Button>
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-2">
+                  <div className="grid grid-cols-3 gap-2.5 sm:grid-cols-4 lg:grid-cols-2">
                     {frames.map((frame, index) => {
                       const selected = frame.id === selectedFrame?.id;
                       return (
@@ -388,10 +404,10 @@ export function DouyinFrameGalleryDialog({
                           type="button"
                           onClick={() => setSelectedFrameId(frame.id)}
                           className={cn(
-                            "group relative overflow-hidden rounded-md border bg-muted text-left transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            "group relative aspect-video overflow-hidden rounded-lg border bg-muted text-left transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                             selected
-                              ? "border-brand ring-2 ring-brand/30"
-                              : "border-border hover:border-brand/50",
+                              ? "border-brand ring-2 ring-brand/40"
+                              : "border-border hover:-translate-y-0.5 hover:border-brand/50 hover:shadow-md",
                           )}
                           aria-label={`Select frame ${index + 1}`}
                           aria-pressed={selected}
@@ -402,13 +418,17 @@ export function DouyinFrameGalleryDialog({
                             alt={`Frame ${frame.frameIndex}`}
                             loading="lazy"
                             className={cn(
-                              "aspect-video w-full object-cover transition-opacity",
-                              !selected && "opacity-90 group-hover:opacity-100",
+                              "h-full w-full object-cover transition-opacity duration-150",
+                              !selected &&
+                                "opacity-80 group-hover:opacity-100",
                             )}
                           />
-                          <span className="flex items-center justify-between gap-2 px-1.5 py-1 font-mono text-[10px] text-muted-foreground">
-                            <span>#{index + 1}</span>
-                            <span>{formatTimestamp(frame.timestampMs)}</span>
+                          {/* gradient + labels overlay */}
+                          <span className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-gradient-to-t from-black/70 via-black/30 to-transparent px-2 pb-1 pt-4 font-mono text-[10px] text-white">
+                            <span className="font-semibold">#{index + 1}</span>
+                            <span className="text-white/80">
+                              {formatTimestamp(frame.timestampMs)}
+                            </span>
                           </span>
                         </button>
                       );
@@ -421,6 +441,35 @@ export function DouyinFrameGalleryDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function StageNav({
+  side,
+  onClick,
+  disabled,
+  label,
+  children,
+}: {
+  side: "left" | "right";
+  onClick: () => void;
+  disabled: boolean;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      className={cn(
+        "absolute top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-black/40 text-white/90 backdrop-blur-md transition-all hover:bg-black/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:pointer-events-none disabled:opacity-0",
+        side === "left" ? "left-3" : "right-3",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -441,7 +490,7 @@ function Field({
 
 function FrameMeta({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+    <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
       <dt className="text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
         {label}
       </dt>
