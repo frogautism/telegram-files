@@ -4,13 +4,22 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import uuid
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 from .douyin_store import douyin_file_row, float_or_default, int_or_default, now_ms
 
 VIDEO_TYPES = {"video"}
+FRAME_MODES = {"interval", "timestamp", "keyframe"}
+FRAME_FORMATS = {"jpg", "jpeg", "png", "webp"}
+DEFAULT_INTERVAL_SECONDS = 5.0
+MIN_INTERVAL_SECONDS = 0.1
+DEFAULT_MAX_FRAMES = 60
+MAX_FRAMES_LIMIT = 120
+
+_FRAME_LOCKS: dict[str, Lock] = {}
+_FRAME_LOCKS_LOCK = Lock()
 
 
 def ffmpeg_path() -> str:
@@ -35,6 +44,42 @@ def ffprobe_path() -> str:
 
 def ffprobe_available() -> bool:
     return bool(ffprobe_path())
+
+
+def _lock_for_file(unique_id: str) -> Lock:
+    normalized = unique_id.strip()
+    with _FRAME_LOCKS_LOCK:
+        lock = _FRAME_LOCKS.get(normalized)
+        if lock is None:
+            lock = Lock()
+            _FRAME_LOCKS[normalized] = lock
+        return lock
+
+
+def normalize_mode(value: Any) -> str:
+    mode = str(value or "interval").strip()
+    if mode not in FRAME_MODES:
+        raise ValueError(f"Unsupported mode '{mode}'.")
+    return mode
+
+
+def normalize_format(value: Any) -> str:
+    fmt = str(value or "jpg").strip().lower() or "jpg"
+    if fmt not in FRAME_FORMATS:
+        raise ValueError(f"Unsupported frame format '{fmt}'.")
+    return fmt
+
+
+def normalize_interval(value: Any) -> float:
+    return max(MIN_INTERVAL_SECONDS, float_or_default(value, DEFAULT_INTERVAL_SECONDS))
+
+
+def normalize_timestamp_ms(value: Any) -> int:
+    return max(0, int_or_default(value, 0))
+
+
+def normalize_max_frames(value: Any) -> int:
+    return min(MAX_FRAMES_LIMIT, max(1, int_or_default(value, DEFAULT_MAX_FRAMES)))
 
 
 def frames_dir_for(file_row: sqlite3.Row) -> Path:
@@ -157,48 +202,6 @@ def delete_frames(db: sqlite3.Connection, unique_id: str) -> int:
     return len(rows)
 
 
-def _create_frame_job(db: sqlite3.Connection, unique_id: str, total: int) -> str:
-    row = douyin_file_row(db, unique_id=unique_id)
-    source_id = str(row["source_id"] or "") if row is not None else ""
-    job_id = uuid.uuid4().hex
-    ts = now_ms()
-    db.execute(
-        """
-        INSERT INTO douyin_job(
-            id, source_id, file_unique_id, url, kind, state, step,
-            total, success, failed, skipped, error,
-            created_at, updated_at, started_at, completed_at
-        )
-        VALUES(?, ?, ?, '', 'frame_extract', 'running', 'extracting', ?, 0, 0, 0, '', ?, ?, ?, NULL)
-        """,
-        (job_id, source_id, unique_id.strip(), total, ts, ts, ts),
-    )
-    db.commit()
-    return job_id
-
-
-def _finish_frame_job(
-    db: sqlite3.Connection,
-    job_id: str,
-    *,
-    success: int,
-    failed: int,
-    error: str = "",
-    state: str = "completed",
-) -> None:
-    ts = now_ms()
-    db.execute(
-        """
-        UPDATE douyin_job
-        SET state = ?, success = ?, failed = ?, total = ?, error = ?,
-            step = ?, updated_at = ?, completed_at = ?
-        WHERE id = ?
-        """,
-        (state, success, failed, success, error, state, ts, ts, job_id),
-    )
-    db.commit()
-
-
 def _insert_frame(
     db: sqlite3.Connection,
     *,
@@ -207,10 +210,11 @@ def _insert_frame(
     frame_index: int,
     timestamp_ms: int,
     local_path: Path,
+    dimensions: tuple[int, int],
     mode: str,
     fmt: str,
 ) -> None:
-    width, height = _probe_dimensions(local_path)
+    width, height = dimensions
     try:
         size = local_path.stat().st_size
     except OSError:
@@ -260,115 +264,116 @@ def extract_frames(
     *,
     unique_id: str,
     mode: str,
-    interval: float = 5.0,
+    interval: float = DEFAULT_INTERVAL_SECONDS,
     timestamp_ms: int | None = None,
-    max_frames: int = 60,
+    max_frames: int = DEFAULT_MAX_FRAMES,
     fmt: str = "jpg",
-    replace: bool = True,
 ) -> dict[str, Any]:
-    row = douyin_file_row(db, unique_id=unique_id)
-    if row is None:
-        raise ValueError("File not found.")
-    file_type = str(row["type"] or "").strip()
-    if file_type not in VIDEO_TYPES:
-        raise ValueError(f"Frame extraction is only supported for video files (got '{file_type}').")
-    local_path_text = str(row["local_path"] or "").strip()
-    if not local_path_text:
-        raise ValueError("Video has no local file to extract frames from.")
-    video_path = Path(local_path_text)
-    if not (video_path.exists() and video_path.is_file()):
-        raise ValueError("Local video file is missing on disk.")
+    mode = normalize_mode(mode)
+    interval = normalize_interval(interval)
+    timestamp_ms = normalize_timestamp_ms(timestamp_ms)
+    max_frames = normalize_max_frames(max_frames)
+    fmt = normalize_format(fmt)
 
     if not ffmpeg_available():
         raise RuntimeError("ffmpeg is not available; cannot extract frames.")
 
-    if mode not in {"interval", "timestamp", "keyframe"}:
-        raise ValueError(f"Unsupported mode '{mode}'.")
+    with _lock_for_file(unique_id):
+        row = douyin_file_row(db, unique_id=unique_id)
+        if row is None:
+            raise ValueError("File not found.")
+        file_type = str(row["type"] or "").strip()
+        if file_type not in VIDEO_TYPES:
+            raise ValueError(
+                f"Frame extraction is only supported for video files (got '{file_type}')."
+            )
+        local_path_text = str(row["local_path"] or "").strip()
+        if not local_path_text:
+            raise ValueError("Video has no local file to extract frames from.")
+        video_path = Path(local_path_text)
+        if not (video_path.exists() and video_path.is_file()):
+            raise ValueError("Local video file is missing on disk.")
 
-    interval = max(0.1, float_or_default(interval, 5.0))
-    max_frames = max(1, int_or_default(max_frames, 60))
-    fmt = (fmt or "jpg").strip().lower() or "jpg"
-    aweme_id = str(row["aweme_id"] or "").strip() or "unknown"
-
-    if replace:
+        aweme_id = str(row["aweme_id"] or "").strip() or "unknown"
+        dimensions = _probe_dimensions(video_path)
         delete_frames(db, unique_id)
 
-    out_dir = frames_dir_for(row)
-    # Clean stale jpgs in target so enumeration is deterministic.
-    for stale in out_dir.glob(f"out_*.{fmt}"):
-        try:
-            stale.unlink()
-        except OSError:
-            pass
+        out_dir = frames_dir_for(row)
+        for stale_format in FRAME_FORMATS:
+            for stale in out_dir.glob(f"out_*.{stale_format}"):
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
 
-    out_pattern = str(out_dir / f"out_%04d.{fmt}")
+        out_pattern = str(out_dir / f"out_%04d.{fmt}")
 
-    if mode == "interval":
-        _run_ffmpeg(
-            [
-                "-i",
-                str(video_path),
-                "-vf",
-                f"fps=1/{interval:g}",
-                "-frames:v",
-                str(max_frames),
-                "-q:v",
-                "3",
-                out_pattern,
-            ]
-        )
-    elif mode == "timestamp":
-        sec = max(0.0, (timestamp_ms or 0) / 1000.0)
-        _run_ffmpeg(
-            [
-                "-ss",
-                str(sec),
-                "-i",
-                str(video_path),
-                "-frames:v",
-                "1",
-                "-q:v",
-                "2",
-                str(out_dir / f"out_0001.{fmt}"),
-            ]
-        )
-    else:  # keyframe
-        _run_ffmpeg(
-            [
-                "-i",
-                str(video_path),
-                "-vf",
-                "select='eq(pict_type,I)'",
-                "-vsync",
-                "vfr",
-                "-frames:v",
-                str(max_frames),
-                "-q:v",
-                "3",
-                out_pattern,
-            ]
-        )
-
-    produced = sorted(out_dir.glob(f"out_*.{fmt}"))
-    frames: list[dict[str, Any]] = []
-    for index, produced_path in enumerate(produced):
         if mode == "interval":
-            frame_ts = round(interval * index * 1000)
+            _run_ffmpeg(
+                [
+                    "-i",
+                    str(video_path),
+                    "-vf",
+                    f"fps=1/{interval:g}",
+                    "-frames:v",
+                    str(max_frames),
+                    "-q:v",
+                    "3",
+                    out_pattern,
+                ]
+            )
         elif mode == "timestamp":
-            frame_ts = int(timestamp_ms or 0)
-        else:
-            frame_ts = 0
-        _insert_frame(
-            db,
-            file_row=row,
-            aweme_id=aweme_id,
-            frame_index=index,
-            timestamp_ms=frame_ts,
-            local_path=produced_path,
-            mode=mode,
-            fmt=fmt,
-        )
-    db.commit()
+            sec = timestamp_ms / 1000.0
+            _run_ffmpeg(
+                [
+                    "-ss",
+                    str(sec),
+                    "-i",
+                    str(video_path),
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "2",
+                    str(out_dir / f"out_0001.{fmt}"),
+                ]
+            )
+        else:  # keyframe
+            _run_ffmpeg(
+                [
+                    "-i",
+                    str(video_path),
+                    "-vf",
+                    "select='eq(pict_type,I)'",
+                    "-vsync",
+                    "vfr",
+                    "-frames:v",
+                    str(max_frames),
+                    "-q:v",
+                    "3",
+                    out_pattern,
+                ]
+            )
+
+        produced = sorted(out_dir.glob(f"out_*.{fmt}"))
+        for index, produced_path in enumerate(produced):
+            if mode == "interval":
+                frame_ts = round(interval * index * 1000)
+            elif mode == "timestamp":
+                frame_ts = timestamp_ms
+            else:
+                frame_ts = 0
+            _insert_frame(
+                db,
+                file_row=row,
+                aweme_id=aweme_id,
+                frame_index=index,
+                timestamp_ms=frame_ts,
+                local_path=produced_path,
+                dimensions=dimensions,
+                mode=mode,
+                fmt=fmt,
+            )
+        db.commit()
 
     frames = list_frames(db, unique_id)
     return {"extracted": len(frames), "frames": frames}

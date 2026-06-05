@@ -900,6 +900,19 @@ def remove_douyin_download(db: sqlite3.Connection, unique_id: str) -> dict[str, 
         return None
     local_path = str(row["local_path"] or "")
     unlink_asset_paths(sibling_asset_paths(local_path, str(row["aweme_id"] or "")))
+    frame_rows = db.execute(
+        "SELECT local_path FROM douyin_frame WHERE file_unique_id = ?",
+        (unique_id.strip(),),
+    ).fetchall()
+    for frame_row in frame_rows:
+        frame_path = str(frame_row["local_path"] or "").strip()
+        if not frame_path:
+            continue
+        try:
+            Path(frame_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    db.execute("DELETE FROM douyin_frame WHERE file_unique_id = ?", (unique_id.strip(),))
     db.execute(
         """
         UPDATE douyin_file

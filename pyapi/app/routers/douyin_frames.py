@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from .. import douyin_frames
 from ..deps import get_db
-from ..douyin_store import float_or_default, int_or_default
+from ..douyin_jobs import create_job, update_job
+from ..douyin_store import douyin_file_row
 
 router = APIRouter(prefix="/douyin")
 
@@ -22,60 +24,101 @@ _MEDIA_TYPES = {
 }
 
 
+class FrameExtractPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["interval", "timestamp", "keyframe"] = "interval"
+    interval: float = Field(
+        default=douyin_frames.DEFAULT_INTERVAL_SECONDS,
+        ge=douyin_frames.MIN_INTERVAL_SECONDS,
+    )
+    timestamp_ms: int | None = Field(default=None, alias="timestampMs", ge=0)
+    max_frames: int = Field(
+        default=douyin_frames.DEFAULT_MAX_FRAMES,
+        alias="maxFrames",
+        ge=1,
+        le=douyin_frames.MAX_FRAMES_LIMIT,
+    )
+    fmt: Literal["jpg", "jpeg", "png", "webp"] = Field(default="jpg", alias="format")
+
+
 @router.post("/file/{uniqueId}/frames/extract")
 async def douyin_extract_frames(
     uniqueId: str,
-    payload: dict[str, Any] | None = None,
+    payload: FrameExtractPayload | None = None,
     db: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, Any]:
-    payload = payload or {}
-    mode = str(payload.get("mode") or "interval").strip()
-    interval = float_or_default(payload.get("interval"), 5.0)
-    timestamp_ms = (
-        int_or_default(payload.get("timestampMs"), 0)
-        if payload.get("timestampMs") is not None
-        else None
+    payload = payload or FrameExtractPayload()
+    total = 1 if payload.mode == "timestamp" else payload.max_frames
+    row = douyin_file_row(db, unique_id=uniqueId)
+    source_id = str(row["source_id"] or "") if row is not None else ""
+    job = create_job(
+        db,
+        kind="frame_extract",
+        source_id=source_id,
+        file_unique_id=uniqueId.strip(),
+        total=total,
+        state="running",
+        step="extracting",
     )
-    max_frames = int_or_default(payload.get("maxFrames"), 60)
-    fmt = str(payload.get("format") or "jpg").strip() or "jpg"
-    replace = bool(payload.get("replace", True))
-
-    total = 1 if mode == "timestamp" else max(1, max_frames)
-    job_id = douyin_frames._create_frame_job(db, uniqueId, total)
+    job_id = str(job["id"])
 
     try:
         result = await asyncio.to_thread(
             douyin_frames.extract_frames,
             db,
             unique_id=uniqueId,
-            mode=mode,
-            interval=interval,
-            timestamp_ms=timestamp_ms,
-            max_frames=max_frames,
-            fmt=fmt,
-            replace=replace,
+            mode=payload.mode,
+            interval=payload.interval,
+            timestamp_ms=payload.timestamp_ms,
+            max_frames=payload.max_frames,
+            fmt=payload.fmt,
         )
     except ValueError as exc:
-        douyin_frames._finish_frame_job(
-            db, job_id, success=0, failed=1, error=str(exc), state="failed"
+        update_job(
+            db,
+            job_id,
+            state="failed",
+            success=0,
+            failed=1,
+            error=str(exc),
+            step="failed",
         )
         message = str(exc)
         status = 404 if "not found" in message.lower() else 400
         raise HTTPException(status_code=status, detail=message) from exc
     except RuntimeError as exc:
-        douyin_frames._finish_frame_job(
-            db, job_id, success=0, failed=1, error=str(exc), state="failed"
+        update_job(
+            db,
+            job_id,
+            state="failed",
+            success=0,
+            failed=1,
+            error=str(exc),
+            step="failed",
         )
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - unexpected failure path
-        douyin_frames._finish_frame_job(
-            db, job_id, success=0, failed=1, error=str(exc), state="failed"
+        update_job(
+            db,
+            job_id,
+            state="failed",
+            success=0,
+            failed=1,
+            error=str(exc),
+            step="failed",
         )
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     extracted = int(result.get("extracted", 0))
-    douyin_frames._finish_frame_job(
-        db, job_id, success=extracted, failed=0, state="completed"
+    update_job(
+        db,
+        job_id,
+        state="completed",
+        total=extracted,
+        success=extracted,
+        failed=0,
+        step="done",
     )
     return {"jobId": job_id, "extracted": extracted, "frames": result.get("frames", [])}
 

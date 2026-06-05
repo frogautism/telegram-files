@@ -18,7 +18,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
-import { Switch } from "@/components/ui/switch";
 import { toast } from "@/hooks/use-toast";
 import { DELETE, getApiUrl, POST } from "@/lib/api";
 import type { DouyinFrame } from "@/lib/types";
@@ -61,7 +60,6 @@ export function DouyinFrameGalleryDialog({
   const [interval, setIntervalValue] = useState("2");
   const [timestampMs, setTimestampMs] = useState("0");
   const [maxFrames, setMaxFrames] = useState("30");
-  const [replace, setReplace] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [selectedFrameId, setSelectedFrameId] = useState<number | null>(null);
@@ -87,7 +85,6 @@ export function DouyinFrameGalleryDialog({
       const body: Record<string, unknown> = {
         mode,
         format: "jpg",
-        replace,
       };
       if (mode === "interval") {
         body.interval = Number(interval) || 1;
@@ -224,11 +221,7 @@ export function DouyinFrameGalleryDialog({
           </Button>
         </div>
 
-        <div className="flex shrink-0 items-center justify-between gap-3">
-          <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-            <Switch checked={replace} onCheckedChange={setReplace} />
-            Replace existing frames
-          </label>
+        <div className="flex shrink-0 items-center justify-end gap-3">
           {frames.length > 0 && (
             <Button
               variant="ghost"
