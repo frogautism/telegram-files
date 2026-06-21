@@ -10,10 +10,6 @@ from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI
 
-from .download_jobs import (
-    complete_download_job_for_file as _complete_download_job_for_file,
-    record_download_job_progress as _record_download_job_progress,
-)
 from .tdlib import TdlibAuthManager
 from .tdlib_downloads import (
     cache_tdlib_file_preview as _cache_tdlib_file_preview,
@@ -34,13 +30,21 @@ MONITOR_PENDING_IDLE_TIMEOUT_SECONDS = 15 * 60
 
 @dataclass(frozen=True)
 class TdlibMonitorDeps:
-    emit_file_update: Callable[[str, dict[str, Any]], Awaitable[None]]
-    emit_file_status: Callable[[str, dict[str, Any]], Awaitable[None]]
-    emit_download_aggregate: Callable[[str, dict[str, Any]], Awaitable[None]]
-    update_tdlib_file_status: Callable[
-        [sqlite3.Connection, int, int, str, dict[str, Any]],
-        None,
+    observe_download: Callable[
+        [
+            str,
+            int,
+            int,
+            str,
+            dict[str, Any],
+            dict[str, Any],
+            int,
+            int,
+            bool,
+        ],
+        Awaitable[None],
     ]
+    emit_download_aggregate: Callable[[str, dict[str, Any]], Awaitable[None]]
     update_speed_tracker: Callable[[sqlite3.Connection, int, int, int, int], None]
     clear_speed_tracker_file: Callable[[int, int], None]
 
@@ -223,12 +227,22 @@ async def _monitor_tdlib_download(
                 )
 
             db: sqlite3.Connection = app.state.db
-            deps.update_tdlib_file_status(
-                db,
+            status_signature = (
+                status,
+                downloaded_size,
+                str(status_payload.get("localPath") or ""),
+            )
+            emit_status = status_signature != last_status_signature
+            await deps.observe_download(
+                session_id,
                 telegram_id,
                 file_id,
                 resolved_unique_id,
+                ws_file,
                 status_payload,
+                total_size,
+                downloaded_size,
+                emit_status,
             )
             deps.update_speed_tracker(
                 db,
@@ -237,25 +251,7 @@ async def _monitor_tdlib_download(
                 downloaded_size,
                 now_ms,
             )
-            _record_download_job_progress(
-                db,
-                telegram_id=telegram_id,
-                file_id=file_id,
-                unique_id=resolved_unique_id,
-                downloaded_size=downloaded_size,
-                expected_size=total_size,
-                local_path=str(status_payload.get("localPath") or ""),
-            )
-
-            await deps.emit_file_update(session_id, {"file": ws_file})
-
-            status_signature = (
-                status,
-                downloaded_size,
-                str(status_payload.get("localPath") or ""),
-            )
-            if status_signature != last_status_signature:
-                await deps.emit_file_status(session_id, status_payload)
+            if emit_status:
                 last_status_signature = status_signature
 
             with _STATE_LOCK:
@@ -271,15 +267,6 @@ async def _monitor_tdlib_download(
             )
 
             if status == "completed":
-                _complete_download_job_for_file(
-                    db,
-                    telegram_id=telegram_id,
-                    file_id=file_id,
-                    unique_id=resolved_unique_id,
-                    local_path=str(status_payload.get("localPath") or ""),
-                    expected_size=total_size,
-                    downloaded_size=downloaded_size,
-                )
                 break
 
             if status == "downloading" or downloaded_size > 0:

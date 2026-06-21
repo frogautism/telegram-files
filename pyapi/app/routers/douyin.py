@@ -11,13 +11,12 @@ from yarl import URL
 
 from ..deps import get_db
 from ..douyin_bridge import DouyinBridgeUnavailable
+from ..douyin_file_lifecycle import douyin_file_lifecycle
 from ..douyin_jobs import get_job, list_jobs
 from ..douyin_runtime import (
-    cancel_download,
     cancel_job,
     discover_source,
     retry_job,
-    start_download_task,
 )
 from ..douyin_store import (
     delete_douyin_source,
@@ -30,7 +29,12 @@ from ..douyin_store import (
     update_douyin_source_auto_settings,
     update_douyin_source_display,
 )
-from ..route_utils import _bool_or_none, _get_filters, _int_or_default, _parse_batch_files
+from ..route_utils import (
+    _bool_or_none,
+    _get_filters,
+    _int_or_default,
+    _parse_batch_files,
+)
 
 router = APIRouter(prefix="/douyin")
 
@@ -46,7 +50,11 @@ def _payload_unique(payload: dict[str, Any]) -> str:
     if unique_id:
         return unique_id
     file_id = _int_or_default(payload.get("fileId"), 0)
-    return str((payload.get("file") or {}).get("uniqueId") or "").strip() if file_id == 0 else ""
+    return (
+        str((payload.get("file") or {}).get("uniqueId") or "").strip()
+        if file_id == 0
+        else ""
+    )
 
 
 def _local_douyin_thumbnail(row: sqlite3.Row) -> Path | None:
@@ -54,7 +62,11 @@ def _local_douyin_thumbnail(row: sqlite3.Row) -> Path | None:
     if not local_path_text:
         return None
     local_path = Path(local_path_text)
-    author_dir = local_path.parent.parent if local_path.parent.name == "video" else local_path.parent
+    author_dir = (
+        local_path.parent.parent
+        if local_path.parent.name == "video"
+        else local_path.parent
+    )
     thumbnail_dir = author_dir / "thumbnail"
     if not thumbnail_dir.exists():
         return None
@@ -70,7 +82,12 @@ def _local_douyin_thumbnail(row: sqlite3.Row) -> Path | None:
             return candidate
     matches = sorted(thumbnail_dir.glob(f"*{str(row['aweme_id'] or '').strip()}*"))
     for candidate in matches:
-        if candidate.is_file() and candidate.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+        if candidate.is_file() and candidate.suffix.lower() in {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp",
+        }:
             return candidate
     return None
 
@@ -139,9 +156,7 @@ def douyin_source_delete(
     request: Request,
     db: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, Any]:
-    delete_files = bool(
-        _bool_or_none(request.query_params.get("deleteFiles")) or False
-    )
+    delete_files = bool(_bool_or_none(request.query_params.get("deleteFiles")) or False)
     result = delete_douyin_source(db, sourceId, delete_files=delete_files)
     if not result.get("deleted"):
         raise HTTPException(status_code=404, detail="Douyin source not found.")
@@ -264,7 +279,9 @@ async def douyin_file_thumbnail(
                 if response.status >= 400:
                     raise HTTPException(status_code=404, detail="Thumbnail not found")
                 body = await response.read()
-                media_type = response.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
+                media_type = response.headers.get("Content-Type", "image/jpeg").split(
+                    ";", 1
+                )[0]
                 return Response(
                     content=body,
                     media_type=media_type or "image/jpeg",
@@ -289,8 +306,7 @@ async def douyin_file_start_download(
         unique_id = str(row["unique_id"] or "") if row is not None else ""
     if not unique_id:
         raise HTTPException(status_code=400, detail="uniqueId or fileId is required.")
-    result = start_download_task(
-        request.app,
+    result = douyin_file_lifecycle(request.app).start(
         unique_id,
         session_id=getattr(request.state, "session_id", ""),
     )
@@ -312,7 +328,10 @@ async def douyin_file_cancel_download(
         unique_id = str(row["unique_id"] or "") if row is not None else ""
     if not unique_id:
         raise HTTPException(status_code=400, detail="uniqueId or fileId is required.")
-    result = await cancel_download(request.app, unique_id)
+    result = await douyin_file_lifecycle(request.app).pause(
+        unique_id,
+        session_id=getattr(request.state, "session_id", ""),
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="File not found.")
     return Response(status_code=200)
@@ -331,14 +350,13 @@ async def douyin_file_toggle_pause_download(
         unique_id = str(row["unique_id"] or "") if row is not None else ""
     if not unique_id:
         raise HTTPException(status_code=400, detail="uniqueId or fileId is required.")
-    row = douyin_file_row(db, unique_id=unique_id)
-    if row is None:
+    result = await douyin_file_lifecycle(request.app).toggle_pause(
+        unique_id,
+        is_paused=_bool_or_none(payload.get("isPaused")),
+        session_id=getattr(request.state, "session_id", ""),
+    )
+    if result is None:
         raise HTTPException(status_code=404, detail="File not found.")
-    status = str(row["download_status"] or "")
-    if status == "downloading":
-        await cancel_download(request.app, unique_id)
-    else:
-        start_download_task(request.app, unique_id, session_id=getattr(request.state, "session_id", ""))
     return Response(status_code=200)
 
 
@@ -355,7 +373,12 @@ async def douyin_file_remove(
         unique_id = str(row["unique_id"] or "") if row is not None else ""
     if not unique_id:
         raise HTTPException(status_code=400, detail="uniqueId or fileId is required.")
-    await cancel_download(request.app, unique_id, remove=True)
+    result = await douyin_file_lifecycle(request.app).remove(
+        unique_id,
+        session_id=getattr(request.state, "session_id", ""),
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="File not found.")
     return Response(status_code=200)
 
 
@@ -367,12 +390,14 @@ async def douyin_files_start_download_multiple(
 ) -> dict[str, int]:
     processed = 0
     failed = 0
+    lifecycle = douyin_file_lifecycle(request.app)
+    session_id = getattr(request.state, "session_id", "")
     for item in _parse_batch_files(payload):
         unique_id = item["uniqueId"]
         if not unique_id and item["fileId"] > 0:
             row = douyin_file_row(db, file_id=item["fileId"])
             unique_id = str(row["unique_id"] or "") if row is not None else ""
-        if not unique_id or start_download_task(request.app, unique_id) is None:
+        if not unique_id or lifecycle.start(unique_id, session_id=session_id) is None:
             failed += 1
             continue
         processed += 1
@@ -387,6 +412,8 @@ async def douyin_files_cancel_download_multiple(
 ) -> dict[str, int]:
     processed = 0
     failed = 0
+    lifecycle = douyin_file_lifecycle(request.app)
+    session_id = getattr(request.state, "session_id", "")
     for item in _parse_batch_files(payload):
         unique_id = item["uniqueId"]
         if not unique_id and item["fileId"] > 0:
@@ -395,7 +422,7 @@ async def douyin_files_cancel_download_multiple(
         if not unique_id:
             failed += 1
             continue
-        if await cancel_download(request.app, unique_id) is None:
+        if await lifecycle.pause(unique_id, session_id=session_id) is None:
             failed += 1
             continue
         processed += 1
@@ -410,7 +437,11 @@ async def douyin_files_toggle_pause_download_multiple(
 ) -> dict[str, int]:
     processed = 0
     failed = 0
-    is_paused = bool(payload.get("isPaused", True))
+    is_paused = _bool_or_none(payload.get("isPaused"))
+    if is_paused is None:
+        is_paused = True
+    lifecycle = douyin_file_lifecycle(request.app)
+    session_id = getattr(request.state, "session_id", "")
     for item in _parse_batch_files(payload):
         unique_id = item["uniqueId"]
         if not unique_id and item["fileId"] > 0:
@@ -419,11 +450,14 @@ async def douyin_files_toggle_pause_download_multiple(
         if not unique_id:
             failed += 1
             continue
-        if is_paused:
-            if await cancel_download(request.app, unique_id) is None:
-                failed += 1
-                continue
-        elif start_download_task(request.app, unique_id) is None:
+        if (
+            await lifecycle.toggle_pause(
+                unique_id,
+                is_paused=is_paused,
+                session_id=session_id,
+            )
+            is None
+        ):
             failed += 1
             continue
         processed += 1
@@ -438,6 +472,8 @@ async def douyin_files_remove_multiple(
 ) -> dict[str, int]:
     processed = 0
     failed = 0
+    lifecycle = douyin_file_lifecycle(request.app)
+    session_id = getattr(request.state, "session_id", "")
     for item in _parse_batch_files(payload):
         unique_id = item["uniqueId"]
         if not unique_id and item["fileId"] > 0:
@@ -446,7 +482,9 @@ async def douyin_files_remove_multiple(
         if not unique_id:
             failed += 1
             continue
-        await cancel_download(request.app, unique_id, remove=True)
+        if await lifecycle.remove(unique_id, session_id=session_id) is None:
+            failed += 1
+            continue
         processed += 1
     return {"processed": processed, "failed": failed}
 
@@ -464,7 +502,9 @@ def douyin_files_update_tags(
         for item in files
         if isinstance(item, dict)
     ]
-    update_douyin_files_tags(db, unique_ids, "" if payload.get("tags") is None else str(payload.get("tags")))
+    update_douyin_files_tags(
+        db, unique_ids, "" if payload.get("tags") is None else str(payload.get("tags"))
+    )
     return Response(status_code=200)
 
 
@@ -474,7 +514,9 @@ def douyin_file_update_tags(
     payload: dict[str, Any],
     db: sqlite3.Connection = Depends(get_db),
 ) -> Response:
-    update_douyin_file_tags(db, uniqueId, "" if payload.get("tags") is None else str(payload.get("tags")))
+    update_douyin_file_tags(
+        db, uniqueId, "" if payload.get("tags") is None else str(payload.get("tags"))
+    )
     return Response(status_code=200)
 
 

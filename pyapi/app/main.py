@@ -36,12 +36,12 @@ from .config import AppConfig, _load_dotenv_if_present
 from .db import create_connection, init_schema
 from .download_runtime import (
     _avg_speed_interval,
-    _ensure_tdlib_download_monitor,
     _persist_speed_statistics,
-    _td_file_status_payload,
     _tdlib_account_root_path,
+    create_telegram_file_lifecycle,
     reset_speed_state,
 )
+from .douyin_file_lifecycle import create_douyin_file_lifecycle
 from .douyin_runtime import douyin_worker_loop as _douyin_worker_loop
 from .routers import register_routers
 from .tdlib import TdlibAuthManager
@@ -93,6 +93,8 @@ async def lifespan(app: FastAPI):
     app.state.db = conn
     app.state.tdlib_manager = tdlib_manager
     app.state.tdlib_error = tdlib_error
+    app.state.telegram_file_lifecycle = create_telegram_file_lifecycle(app)
+    app.state.douyin_file_lifecycle = create_douyin_file_lifecycle(app)
     _reset_worker_state()
     _reset_tdlib_monitor_state()
     reset_speed_state()
@@ -108,16 +110,6 @@ async def lifespan(app: FastAPI):
             WorkerDeps(
                 tdlib_account_root_path=_tdlib_account_root_path,
                 emit_file_status=_emit_worker_file_status,
-                td_file_status_payload=_td_file_status_payload,
-                ensure_tdlib_download_monitor=lambda worker_app, session_id, telegram_id, file_id, unique_id: (
-                    _ensure_tdlib_download_monitor(
-                        worker_app,
-                        session_id=session_id,
-                        telegram_id=telegram_id,
-                        file_id=file_id,
-                        unique_id=unique_id,
-                    )
-                ),
                 avg_speed_interval=_avg_speed_interval,
                 persist_speed_statistics=_persist_speed_statistics,
             ),
@@ -137,6 +129,7 @@ async def lifespan(app: FastAPI):
             await douyin_worker_task
         except asyncio.CancelledError:
             pass
+        await app.state.douyin_file_lifecycle.close()
         if tdlib_manager is not None:
             tdlib_manager.close()
         conn.close()
