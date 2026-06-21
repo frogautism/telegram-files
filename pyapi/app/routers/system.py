@@ -19,8 +19,10 @@ from ..settings_keys import default_value_for
 from ..tdlib_downloads import reset_tdlib_file_preview_cache
 from ..tdlib_monitor import reset_tdlib_monitor_state
 from ..automation_workers import reset_worker_state
+from ..douyin_config import normalize_douyin_cookie_text, parse_douyin_cookies
 
 router = APIRouter()
+MAX_COOKIE_IMPORT_CHARS = 2 * 1024 * 1024
 
 
 @router.get("/settings")
@@ -56,8 +58,38 @@ def settings_create(
     normalized = {
         str(key): "" if value is None else str(value) for key, value in payload.items()
     }
+    if "douyinCookies" in normalized:
+        cookie_source = normalized["douyinCookies"]
+        normalized_cookie = normalize_douyin_cookie_text(cookie_source)
+        if cookie_source.strip() and not normalized_cookie:
+            raise HTTPException(
+                status_code=400,
+                detail="No valid Douyin cookies were found.",
+            )
+        normalized["douyinCookies"] = normalized_cookie
     upsert_settings(db, normalized)
     return Response(status_code=200)
+
+
+@router.post("/douyin/cookies/parse")
+def douyin_cookies_parse(payload: dict[str, Any]) -> dict[str, Any]:
+    content = str(payload.get("content") or "")
+    if len(content) > MAX_COOKIE_IMPORT_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail="Cookie file is too large (maximum 2 MB).",
+        )
+
+    cookies = parse_douyin_cookies(content)
+    if not cookies:
+        raise HTTPException(
+            status_code=400,
+            detail="No valid Douyin cookies were found in this file.",
+        )
+    return {
+        "cookieHeader": "; ".join(f"{key}={value}" for key, value in cookies.items()),
+        "count": len(cookies),
+    }
 
 
 @router.post("/settings/offline-reset-pin")

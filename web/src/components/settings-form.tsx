@@ -1,4 +1,4 @@
-import { Bell, Copy, Loader2, Wrench } from "lucide-react";
+import { Bell, Copy, FileUp, Loader2, Wrench } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -8,7 +8,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import React, { type FormEvent, useState } from "react";
+import React, {
+  type ChangeEvent,
+  type FormEvent,
+  useRef,
+  useState,
+} from "react";
 import { useSettings } from "@/hooks/use-settings";
 import { useTelegramAccount } from "@/hooks/use-telegram-account";
 import { useCopyToClipboard } from "@/hooks/use-copy-to-clipboard";
@@ -23,7 +28,7 @@ import { split } from "lodash";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import useSWRMutation from "swr/mutation";
-import { POST } from "@/lib/api";
+import { POST, request } from "@/lib/api";
 import { safeJsonParse } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 
@@ -53,6 +58,11 @@ type OfflineResetResponse = {
   groupAutomationReset: number;
 };
 
+type DouyinCookieParseResponse = {
+  cookieHeader: string;
+  count: number;
+};
+
 export default function SettingsForm() {
   const { settings, setSetting, updateSettings } = useSettings();
   const { account } = useTelegramAccount();
@@ -63,6 +73,8 @@ export default function SettingsForm() {
   const [currentPin, setCurrentPin] = useState("");
   const [newPin, setNewPin] = useState("");
   const [resetPin, setResetPin] = useState("");
+  const [isParsingCookies, setIsParsingCookies] = useState(false);
+  const cookieFileInputRef = useRef<HTMLInputElement>(null);
   const pinEnabled =
     String(settings?.offlineResetPinEnabled ?? "false") === "true";
 
@@ -217,6 +229,37 @@ export default function SettingsForm() {
         title: "Offline reset failed",
         description: error instanceof Error ? error.message : "Request failed.",
       });
+    }
+  };
+
+  const handleCookieFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setIsParsingCookies(true);
+    try {
+      const result = await request<DouyinCookieParseResponse>(
+        "/douyin/cookies/parse",
+        {
+          method: "POST",
+          body: JSON.stringify({ content: await file.text() }),
+        },
+      );
+      await setSetting("douyinCookies", result.cookieHeader);
+      toast({
+        variant: "success",
+        title: "Cookie file loaded",
+        description: `Parsed ${result.count} Douyin cookies from ${file.name}. Submit to save them.`,
+      });
+    } catch (error) {
+      toast({
+        variant: "error",
+        title: "Cookie import failed",
+        description: error instanceof Error ? error.message : "Request failed.",
+      });
+    } finally {
+      setIsParsingCookies(false);
     }
   };
 
@@ -513,16 +556,44 @@ export default function SettingsForm() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="douyin-cookies">Cookies</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="douyin-cookies">Cookies</Label>
+                <input
+                  ref={cookieFileInputRef}
+                  className="hidden"
+                  type="file"
+                  accept=".txt,.cookies,.json,text/plain,application/json"
+                  onChange={(event) => void handleCookieFile(event)}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isParsingCookies}
+                  onClick={() => cookieFileInputRef.current?.click()}
+                >
+                  {isParsingCookies ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileUp className="mr-2 h-4 w-4" />
+                  )}
+                  Import cookie file
+                </Button>
+              </div>
               <Textarea
                 id="douyin-cookies"
                 rows={4}
                 value={settings?.douyinCookies ?? ""}
-                placeholder="Paste a Douyin Cookie header or JSON object"
+                placeholder="Paste a Cookie header, JSON object, or Netscape cookie export"
                 onChange={(event) =>
                   void setSetting("douyinCookies", event.target.value)
                 }
               />
+              <p className="text-xs text-muted-foreground">
+                Supports browser-exported Netscape cookie files like
+                www.douyin.com_cookies.txt. Only Douyin-domain cookies are
+                imported.
+              </p>
             </div>
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
