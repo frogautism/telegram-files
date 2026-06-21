@@ -7,6 +7,11 @@ from typing import Any
 
 from .config import AppConfig
 from .db import get_settings_by_keys
+from .vendor.douyin_downloader.utils.cookie_utils import (
+    is_valid_cookie_name,
+    parse_cookie_header,
+    sanitize_cookies,
+)
 
 
 DOUYIN_SETTING_KEYS = [
@@ -55,19 +60,52 @@ def _float(value: Any, default: float) -> float:
         return default
 
 
-def _cookie_text(value: Any) -> str:
+def parse_douyin_cookies(value: Any) -> dict[str, str]:
     if value is None:
-        return ""
+        return {}
     text = str(value).strip()
     if not text:
-        return ""
+        return {}
+
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        return text
+        parsed = None
     if isinstance(parsed, dict):
-        return "; ".join(f"{key}={val}" for key, val in parsed.items() if key)
-    return text
+        return sanitize_cookies(parsed)
+
+    cookies: dict[str, str] = {}
+    netscape_lines = 0
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or (line.startswith("#") and not line.startswith("#HttpOnly_")):
+            continue
+        fields = line.split("\t")
+        if len(fields) != 7:
+            continue
+        domain, _include_subdomains, _path, _secure, _expires, name, cookie_value = (
+            fields
+        )
+        if domain.startswith("#HttpOnly_"):
+            domain = domain.removeprefix("#HttpOnly_")
+        normalized_domain = domain.lstrip(".").lower()
+        if normalized_domain != "douyin.com" and not normalized_domain.endswith(
+            ".douyin.com"
+        ):
+            continue
+        netscape_lines += 1
+        name = name.strip()
+        if is_valid_cookie_name(name):
+            cookies[name] = cookie_value.strip()
+
+    if netscape_lines:
+        return cookies
+    return parse_cookie_header(text)
+
+
+def normalize_douyin_cookie_text(value: Any) -> str:
+    cookies = parse_douyin_cookies(value)
+    return "; ".join(f"{key}={val}" for key, val in cookies.items())
 
 
 def douyin_runtime_path(config: AppConfig) -> str:
@@ -109,7 +147,7 @@ def build_douyin_config(config: AppConfig, db) -> dict[str, Any]:
     comments_enabled = _bool(settings.get("douyinComments"), False)
     return {
         "path": output_path,
-        "cookie": _cookie_text(settings.get("douyinCookies")),
+        "cookie": normalize_douyin_cookie_text(settings.get("douyinCookies")),
         "proxy": str(settings.get("douyinProxy") or os.getenv("DOUYIN_PROXY") or ""),
         "thread": max(1, _int(settings.get("douyinThread"), 3)),
         "retry_times": max(0, _int(settings.get("douyinRetryTimes"), 3)),
