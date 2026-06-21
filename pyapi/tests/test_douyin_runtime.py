@@ -4,17 +4,19 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from app.config import AppConfig
 from app.db import init_schema
-from app.douyin_jobs import create_job, get_job
+from app.douyin_file_lifecycle import (
+    DouyinFileLifecycle,
+    DouyinLifecycleRuntime,
+)
+from app.douyin_jobs import create_job
 from app.douyin_runtime import (
-    cancel_download,
     discover_source,
     retry_job,
     runtime_from_app,
-    start_download_task,
 )
 from app.douyin_store import (
     douyin_file_row,
@@ -63,6 +65,18 @@ class DouyinRuntimeTest(unittest.IsolatedAsyncioTestCase):
         )
         return record["uniqueId"]
 
+    def _lifecycle(self, app: SimpleNamespace, downloader) -> DouyinFileLifecycle:
+        lifecycle = DouyinFileLifecycle(
+            app,
+            DouyinLifecycleRuntime(
+                downloader=downloader,
+                emit_file=AsyncMock(),
+                emit_job=AsyncMock(),
+            ),
+        )
+        app.state.douyin_file_lifecycle = lifecycle
+        return lifecycle
+
     async def test_retry_file_download_returns_new_active_job(self) -> None:
         app = self._app()
         unique_id = self._file(app)
@@ -73,26 +87,20 @@ class DouyinRuntimeTest(unittest.IsolatedAsyncioTestCase):
             state="failed",
         )
 
-        async def fake_download_task(*_args, **_kwargs):
+        async def fake_download(*_args, **_kwargs):
             await asyncio.sleep(0.05)
+            return {"localPath": "", "size": 0, "assets": []}
 
-        with (
-            patch("app.douyin_runtime._download_file_task", fake_download_task),
-            patch("app.douyin_runtime.emit_douyin_file_status", AsyncMock()),
-            patch("app.douyin_runtime.emit_douyin_job", AsyncMock()),
-        ):
-            retried = await retry_job(app, old_job["id"])
+        lifecycle = self._lifecycle(app, fake_download)
+
+        retried = await retry_job(app, old_job["id"])
 
         self.assertNotEqual(retried["id"], old_job["id"])
         self.assertEqual(retried["state"], "running")
         self.assertEqual(retried["fileUniqueId"], unique_id)
 
-        runtime = runtime_from_app(app)
-        task = runtime.tasks.get(unique_id)
-        if task is not None:
-            task.cancel()
-            with self.assertRaises(asyncio.CancelledError):
-                await task
+        self.assertTrue(lifecycle.is_active(unique_id))
+        await lifecycle.close()
 
     async def test_remove_active_download_is_not_rewritten_to_paused(self) -> None:
         app = self._app()
@@ -103,25 +111,31 @@ class DouyinRuntimeTest(unittest.IsolatedAsyncioTestCase):
             started.set()
             await asyncio.sleep(10)
 
-        with (
-            patch("app.douyin_runtime.download_aweme", fake_download),
-            patch("app.douyin_runtime.emit_douyin_file_status", AsyncMock()),
-            patch("app.douyin_runtime.emit_douyin_job", AsyncMock()),
-        ):
-            start_download_task(app, unique_id)
-            await started.wait()
-            removed = await cancel_download(app, unique_id, remove=True)
-            task = runtime_from_app(app).tasks.get(unique_id)
-            if task is not None:
-                await asyncio.gather(task, return_exceptions=True)
+        lifecycle = self._lifecycle(app, fake_download)
+
+        lifecycle.start(unique_id)
+        await started.wait()
+        removed = await lifecycle.remove(unique_id)
+        await lifecycle.close()
 
         self.assertEqual(removed["downloadStatus"], "idle")
         row = douyin_file_row(app.state.db, unique_id=unique_id)
         self.assertEqual(row["download_status"], "idle")
-        job = get_job(app.state.db, runtime_from_app(app).file_jobs.get(unique_id, ""))
-        self.assertIsNone(job)
+        job = app.state.db.execute(
+            """
+            SELECT state
+            FROM douyin_job
+            WHERE file_unique_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (unique_id,),
+        ).fetchone()
+        self.assertEqual(job["state"], "cancelled")
 
-    async def test_concurrent_refresh_skip_does_not_overwrite_source_status(self) -> None:
+    async def test_concurrent_refresh_skip_does_not_overwrite_source_status(
+        self,
+    ) -> None:
         app = self._app()
         source = upsert_douyin_source(
             app.state.db,
@@ -134,7 +148,9 @@ class DouyinRuntimeTest(unittest.IsolatedAsyncioTestCase):
         result = await discover_source(app, url=source["url"], source_id=source["id"])
 
         self.assertEqual(result["jobId"], "")
-        self.assertEqual(get_douyin_source(app.state.db, source["id"])["status"], "idle")
+        self.assertEqual(
+            get_douyin_source(app.state.db, source["id"])["status"], "idle"
+        )
 
 
 if __name__ == "__main__":

@@ -21,12 +21,9 @@ from .db import (
     update_chat_group_auto_settings,
 )
 from .download_jobs import (
-    complete_download_job_for_file as _complete_download_job_for_file,
     due_download_jobs as _due_download_jobs,
     mark_download_job_failed as _mark_download_job_failed,
-    mark_download_job_monitoring as _mark_download_job_monitoring,
     mark_download_job_restarted as _mark_download_job_restarted,
-    mark_download_job_starting as _mark_download_job_starting,
     recover_interrupted_download_jobs as _recover_interrupted_download_jobs,
     stale_monitoring_jobs as _stale_monitoring_jobs,
     upsert_download_job as _upsert_download_job,
@@ -41,14 +38,16 @@ from .file_record_ops import (
 )
 from .filter_expr import evaluate_filter_expr as _evaluate_filter_expr
 from .tdlib import TdlibAuthManager
-from .tdlib_downloads import (
-    start_tdlib_download_for_message as _start_tdlib_download_for_message,
-)
 from .tdlib_file_mapper import td_message_to_file as _td_message_to_file
 from .tdlib_queries import (
     load_tdlib_session_for_account as _load_tdlib_session_for_account,
 )
 from .transfer_ops import execute_transfer as _execute_transfer
+from .telegram_file_lifecycle import (
+    FileLifecycleError,
+    StartDownload,
+    telegram_file_lifecycle,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -82,8 +81,6 @@ class WorkerDeps:
         str | None,
     ]
     emit_file_status: Callable[[dict[str, Any]], Awaitable[None]]
-    td_file_status_payload: Callable[[dict[str, Any]], dict[str, Any]]
-    ensure_tdlib_download_monitor: Callable[[FastAPI, str, int, int, str], None]
     avg_speed_interval: Callable[[sqlite3.Connection], int]
     persist_speed_statistics: Callable[[sqlite3.Connection], None]
 
@@ -1156,33 +1153,20 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
             candidate_chat_id = _int_or_default(candidate.get("chatId"), 0)
             candidate_message_id = _int_or_default(candidate.get("messageId"), 0)
             candidate_file_id = _int_or_default(candidate.get("fileId"), 0)
-            _mark_download_job_starting(
-                db,
-                telegram_id=telegram_id,
-                chat_id=candidate_chat_id,
-                message_id=candidate_message_id,
-                file_id=candidate_file_id,
-            )
             try:
-                file_record = await asyncio.to_thread(
-                    _start_tdlib_download_for_message,
-                    td_manager,
-                    db=db,
-                    telegram_id=telegram_id,
-                    root_path=root_path,
-                    chat_id=candidate_chat_id,
-                    message_id=candidate_message_id,
-                    file_id=candidate_file_id,
+                file_record = await telegram_file_lifecycle(app).start(
+                    StartDownload(
+                        telegram_id=telegram_id,
+                        chat_id=candidate_chat_id,
+                        message_id=candidate_message_id,
+                        file_id=candidate_file_id,
+                        source="auto",
+                        event_session_id=None,
+                        monitor_session_id=f"worker:{telegram_id}",
+                    ),
+                    root_path_cache=root_path_cache,
                 )
-            except Exception as exc:
-                _mark_download_job_failed(
-                    db,
-                    telegram_id=telegram_id,
-                    chat_id=candidate_chat_id,
-                    message_id=candidate_message_id,
-                    file_id=candidate_file_id,
-                    error=str(exc),
-                )
+            except FileLifecycleError as exc:
                 logger.warning(
                     "Auto-download start failed for telegram=%s candidate=%s: %s",
                     telegram_id,
@@ -1190,9 +1174,6 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
                     exc,
                 )
                 continue
-
-            _db_upsert_tdlib_file_record(db, file_payload=file_record)
-            await deps.emit_file_status(deps.td_file_status_payload(file_record))
 
             automation = _resolve_effective_automation_for_chat(
                 telegram_id=telegram_id,
@@ -1221,37 +1202,6 @@ async def _run_auto_download_tick(app: FastAPI, deps: WorkerDeps) -> None:
                         thread_chat_id=thread_chat_id,
                         message_thread_id=message_thread_id,
                     )
-
-            monitor_file_id = _int_or_default(file_record.get("id"), 0)
-            download_status = str(file_record.get("downloadStatus") or "").strip().lower()
-            if download_status == "completed":
-                _complete_download_job_for_file(
-                    db,
-                    telegram_id=telegram_id,
-                    file_id=monitor_file_id,
-                    unique_id=str(file_record.get("uniqueId") or ""),
-                    local_path=str(file_record.get("localPath") or ""),
-                    expected_size=_int_or_default(file_record.get("size"), 0),
-                    downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
-                )
-            if monitor_file_id > 0 and download_status == "downloading":
-                _mark_download_job_monitoring(
-                    db,
-                    telegram_id=telegram_id,
-                    chat_id=candidate_chat_id,
-                    message_id=candidate_message_id,
-                    file_id=candidate_file_id,
-                    unique_id=str(file_record.get("uniqueId") or ""),
-                    expected_size=_int_or_default(file_record.get("size"), 0),
-                    downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
-                )
-                deps.ensure_tdlib_download_monitor(
-                    app,
-                    f"worker:{telegram_id}",
-                    telegram_id,
-                    monitor_file_id,
-                    str(file_record.get("uniqueId") or ""),
-                )
 
             surplus -= 1
 

@@ -5,7 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 
@@ -29,6 +29,7 @@ from app.db import (
 )
 from app.download_runtime import _queue_transfer_for_completed_file
 from app.file_record_ops import file_for_transfer, upsert_tdlib_file_record
+from app.telegram_file_lifecycle import LifecycleRuntime, TelegramFileLifecycle
 from app.transfer_ops import execute_transfer
 
 
@@ -223,8 +224,6 @@ class TransferOpsTest(unittest.TestCase):
         return WorkerDeps(
             tdlib_account_root_path=lambda *_args, **_kwargs: None,
             emit_file_status=_emit_file_status,
-            td_file_status_payload=lambda payload: payload,
-            ensure_tdlib_download_monitor=lambda *_args, **_kwargs: None,
             avg_speed_interval=lambda _db: 0,
             persist_speed_statistics=lambda _db: None,
         )
@@ -535,28 +534,46 @@ class TransferOpsTest(unittest.TestCase):
             }
         )
 
-        emitted: list[dict[str, object]] = []
         monitor_calls: list[tuple[object, ...]] = []
-
-        async def _emit_file_status(payload: dict[str, object]) -> None:
-            emitted.append(payload)
+        emitted: list[dict[str, object]] = []
 
         deps = WorkerDeps(
             tdlib_account_root_path=lambda *_args, **_kwargs: "D:/tdlib/account-1",
-            emit_file_status=_emit_file_status,
-            td_file_status_payload=lambda payload: payload,
-            ensure_tdlib_download_monitor=lambda *args: monitor_calls.append(args),
+            emit_file_status=AsyncMock(),
             avg_speed_interval=lambda _db: 0,
             persist_speed_statistics=lambda _db: None,
         )
         app = FastAPI()
         app.state.db = conn
         td_manager = _DuplicateTdlibManager()
+        app.state.telegram_file_lifecycle = TelegramFileLifecycle(
+            app,
+            LifecycleRuntime(
+                account_root_path=lambda *_args, **_kwargs: "D:/tdlib/account-1",
+                update_tdlib_file_status=lambda *_args, **_kwargs: None,
+                ensure_monitor=lambda *args: monitor_calls.append(args),
+                stop_monitor=lambda *_args, **_kwargs: None,
+                emit_download_aggregate=AsyncMock(),
+                status_payload=lambda payload: payload,
+            ),
+        )
+
+        async def _capture_event(payload, session_id=None):
+            del session_id
+            emitted.append(payload["data"])
 
         with (
             patch(
                 "app.automation_workers._tdlib_manager_from_app",
                 return_value=td_manager,
+            ),
+            patch(
+                "app.telegram_file_lifecycle._tdlib_manager_from_app",
+                return_value=td_manager,
+            ),
+            patch(
+                "app.telegram_file_lifecycle._emit_ws_payload",
+                side_effect=_capture_event,
             ),
             patch(
                 "app.tdlib_downloads._load_tdlib_session_for_account",

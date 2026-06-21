@@ -11,13 +11,6 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from .app_state import (
-    EVENT_TYPE_FILE_DOWNLOAD,
-    EVENT_TYPE_FILE_STATUS,
-    EVENT_TYPE_FILE_UPDATE,
-    _build_ws_payload,
-    _emit_ws_payload,
-)
 from .automation_workers import queue_transfer_candidate as _queue_transfer_candidate
 from .automation_workers import (
     _resolve_effective_automation_for_chat,
@@ -40,6 +33,12 @@ from .tdlib_monitor import (
     stop_tdlib_download_monitor as _stop_tdlib_download_monitor_impl,
 )
 from .tdlib_queries import default_chat_auto as _default_chat_auto
+from .telegram_file_lifecycle import (
+    LifecycleRuntime,
+    MonitorObservation,
+    TelegramFileLifecycle,
+    telegram_file_lifecycle,
+)
 
 
 SPEED_INTERVAL_CACHE_TTL_SECONDS = 5.0
@@ -482,47 +481,44 @@ def _td_file_status_payload(file_record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _tdlib_monitor_deps() -> TdlibMonitorDeps:
-    async def _emit_file_update(
+def _tdlib_monitor_deps(app: FastAPI) -> TdlibMonitorDeps:
+    async def _observe_download(
         session_id: str,
-        payload: dict[str, Any],
+        telegram_id: int,
+        file_id: int,
+        unique_id: str,
+        file_update: dict[str, Any],
+        status_payload: dict[str, Any],
+        expected_size: int,
+        downloaded_size: int,
+        emit_status: bool,
     ) -> None:
-        await _emit_ws_payload(
-            _build_ws_payload(EVENT_TYPE_FILE_UPDATE, payload),
-            session_id=session_id,
-        )
-
-    async def _emit_file_status(
-        session_id: str,
-        payload: dict[str, Any],
-    ) -> None:
-        await _emit_ws_payload(
-            _build_ws_payload(EVENT_TYPE_FILE_STATUS, payload),
-            session_id=session_id,
+        await telegram_file_lifecycle(app).observe(
+            MonitorObservation(
+                session_id=session_id,
+                telegram_id=telegram_id,
+                file_id=file_id,
+                unique_id=unique_id,
+                file_update=file_update,
+                status=status_payload,
+                expected_size=expected_size,
+                downloaded_size=downloaded_size,
+                emit_status=emit_status,
+            )
         )
 
     async def _emit_download_aggregate(
         session_id: str,
         payload: dict[str, Any],
     ) -> None:
-        await _emit_ws_payload(
-            _build_ws_payload(EVENT_TYPE_FILE_DOWNLOAD, payload),
-            session_id=session_id,
+        await telegram_file_lifecycle(app).emit_download_aggregate(
+            session_id,
+            payload,
         )
 
     return TdlibMonitorDeps(
-        emit_file_update=_emit_file_update,
-        emit_file_status=_emit_file_status,
+        observe_download=_observe_download,
         emit_download_aggregate=_emit_download_aggregate,
-        update_tdlib_file_status=lambda db, telegram_id, file_id, unique_id, status_payload: (
-            _db_update_tdlib_file_status(
-                db,
-                telegram_id=telegram_id,
-                file_id=file_id,
-                unique_id=unique_id,
-                status_payload=status_payload,
-            )
-        ),
         update_speed_tracker=lambda db, telegram_id, file_id, downloaded_size, timestamp_ms: (
             _update_speed_tracker(
                 db,
@@ -552,18 +548,6 @@ def _stop_tdlib_download_monitor(
     )
 
 
-async def _emit_tdlib_download_aggregate(
-    *,
-    session_id: str,
-    telegram_id: int,
-) -> None:
-    await _emit_tdlib_download_aggregate_impl(
-        session_id=session_id,
-        telegram_id=telegram_id,
-        deps=_tdlib_monitor_deps(),
-    )
-
-
 def _ensure_tdlib_download_monitor(
     app: FastAPI,
     *,
@@ -578,5 +562,49 @@ def _ensure_tdlib_download_monitor(
         telegram_id=telegram_id,
         file_id=file_id,
         unique_id=unique_id,
-        deps=_tdlib_monitor_deps(),
+        deps=_tdlib_monitor_deps(app),
+    )
+
+
+def create_telegram_file_lifecycle(app: FastAPI) -> TelegramFileLifecycle:
+    async def _emit_aggregate(session_id: str, telegram_id: int) -> None:
+        await _emit_tdlib_download_aggregate_impl(
+            session_id=session_id,
+            telegram_id=telegram_id,
+            deps=_tdlib_monitor_deps(app),
+        )
+
+    return TelegramFileLifecycle(
+        app,
+        LifecycleRuntime(
+            account_root_path=_tdlib_account_root_path,
+            update_tdlib_file_status=lambda db, telegram_id, file_id, unique_id, status_payload, allow_completed_reset: (
+                _db_update_tdlib_file_status(
+                    db,
+                    telegram_id=telegram_id,
+                    file_id=file_id,
+                    unique_id=unique_id,
+                    status_payload=status_payload,
+                    allow_completed_reset=allow_completed_reset,
+                )
+            ),
+            ensure_monitor=lambda lifecycle_app, session_id, telegram_id, file_id, unique_id: (
+                _ensure_tdlib_download_monitor(
+                    lifecycle_app,
+                    session_id=session_id,
+                    telegram_id=telegram_id,
+                    file_id=file_id,
+                    unique_id=unique_id,
+                )
+            ),
+            stop_monitor=lambda session_id, telegram_id, file_id: (
+                _stop_tdlib_download_monitor(
+                    session_id=session_id,
+                    telegram_id=telegram_id,
+                    file_id=file_id,
+                )
+            ),
+            emit_download_aggregate=_emit_aggregate,
+            status_payload=_td_file_status_payload,
+        ),
     )

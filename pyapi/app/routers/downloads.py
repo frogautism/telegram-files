@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import logging
 import sqlite3
 from typing import Any
 from uuid import uuid4
@@ -9,60 +7,29 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from ..app_state import (
-    EVENT_TYPE_FILE_STATUS,
-    _build_ws_payload,
-    _emit_ws_payload,
     _is_pending_account,
     _session_id_from_request,
-    _tdlib_manager_from_app,
 )
-from ..config import AppConfig
 from ..db import (
-    cancel_file_download,
     delete_auto_transfer_preset,
-    get_telegram_account,
     list_auto_transfer_presets,
-    remove_file_download,
     save_auto_transfer_preset,
-    start_file_download,
-    toggle_pause_file_download,
     update_auto_settings,
     update_chat_group_auto_settings,
 )
 from ..deps import get_db
-from ..download_runtime import (
-    _db_update_tdlib_file_status,
-    _emit_tdlib_download_aggregate,
-    _ensure_tdlib_download_monitor,
-    _stop_tdlib_download_monitor,
-    _td_file_status_payload,
-    _tdlib_account_root_path,
-)
-from ..download_jobs import (
-    cancel_download_job as _cancel_download_job,
-    complete_download_job_for_file as _complete_download_job_for_file,
-    mark_download_job_failed as _mark_download_job_failed,
-    mark_download_job_monitoring as _mark_download_job_monitoring,
-    mark_download_job_starting as _mark_download_job_starting,
-    upsert_download_job as _upsert_download_job,
-)
-from ..file_record_ops import (
-    upsert_tdlib_file_record as _db_upsert_tdlib_file_record,
-)
 from ..route_utils import (
     _bool_or_none,
-    _file_status_from_file_record,
     _int_or_default,
     _parse_batch_files,
 )
-from ..tdlib_downloads import (
-    start_tdlib_download_for_message as _start_tdlib_download_for_message,
-    tdlib_cancel_download_fallback as _tdlib_cancel_download_fallback,
-    tdlib_remove_file_fallback as _tdlib_remove_file_fallback,
-    tdlib_toggle_pause_download_fallback as _tdlib_toggle_pause_download_fallback,
+from ..telegram_file_lifecycle import (
+    FileLifecycleError,
+    FileLifecycleNotFound,
+    FileReference,
+    StartDownload,
+    telegram_file_lifecycle,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -82,133 +49,23 @@ async def file_start_download_route(
             status_code=400, detail="chatId, messageId and fileId are required."
         )
 
-    started_via_tdlib = False
-    file_record: dict[str, Any] | None = None
-    tdlib_start_error: str | None = None
-
-    td_manager = _tdlib_manager_from_app(request.app)
-    if td_manager is not None:
-        config: AppConfig = request.app.state.config
-        account = get_telegram_account(
-            db,
-            telegram_id=telegramId,
-            app_root=str(config.app_root),
-        )
-        if account is not None:
-            _upsert_download_job(
-                db,
-                telegram_id=telegramId,
-                chat_id=chat_id,
-                message_id=message_id,
-                file_id=file_id,
-                session_id=_session_id_from_request(request),
-                source="manual",
-            )
-            _mark_download_job_starting(
-                db,
-                telegram_id=telegramId,
-                chat_id=chat_id,
-                message_id=message_id,
-                file_id=file_id,
-            )
-            try:
-                file_record = await asyncio.to_thread(
-                    _start_tdlib_download_for_message,
-                    td_manager,
-                    db=db,
-                    telegram_id=telegramId,
-                    root_path=str(account.get("rootPath") or ""),
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    file_id=file_id,
-                )
-                started_via_tdlib = True
-                _db_upsert_tdlib_file_record(db, file_payload=file_record)
-            except Exception as exc:
-                tdlib_start_error = str(exc)
-                _mark_download_job_failed(
-                    db,
-                    telegram_id=telegramId,
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    file_id=file_id,
-                    error=tdlib_start_error,
-                )
-                logger.warning(
-                    "TDLib start download failed telegram=%s chat=%s message=%s file=%s: %s",
-                    telegramId,
-                    chat_id,
-                    message_id,
-                    file_id,
-                    exc,
-                )
-
-    if file_record is None:
-        if tdlib_start_error is not None:
-            raise HTTPException(status_code=400, detail=tdlib_start_error)
-
-        file_record = start_file_download(
-            db,
-            telegram_id=telegramId,
-            chat_id=chat_id,
-            message_id=message_id,
-            file_id=file_id,
-        )
-        if file_record is None:
-            raise HTTPException(status_code=404, detail="File not found")
-
     session_id = _session_id_from_request(request)
-    status_payload = (
-        _file_status_from_file_record(file_record)
-        if "messageId" in file_record
-        else _td_file_status_payload(file_record)
-    )
-    await _emit_ws_payload(
-        _build_ws_payload(
-            EVENT_TYPE_FILE_STATUS,
-            status_payload,
-        ),
-        session_id=session_id,
-    )
-
-    if (
-        started_via_tdlib
-        and str(file_record.get("downloadStatus") or "").strip() == "downloading"
-    ):
-        unique_id = str(file_record.get("uniqueId") or "").strip()
-        monitor_file_id = _int_or_default(file_record.get("id"), file_id)
-        _mark_download_job_monitoring(
-            db,
-            telegram_id=telegramId,
-            chat_id=chat_id,
-            message_id=message_id,
-            file_id=file_id,
-            unique_id=unique_id,
-            expected_size=_int_or_default(file_record.get("size"), 0),
-            downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
+    try:
+        return await telegram_file_lifecycle(request.app).start(
+            StartDownload(
+                telegram_id=telegramId,
+                chat_id=chat_id,
+                message_id=message_id,
+                file_id=file_id,
+                source="manual",
+                event_session_id=session_id,
+                monitor_session_id=session_id,
+            )
         )
-        _ensure_tdlib_download_monitor(
-            request.app,
-            session_id=session_id,
-            telegram_id=telegramId,
-            file_id=monitor_file_id,
-            unique_id=unique_id,
-        )
-    elif (
-        started_via_tdlib
-        and str(file_record.get("downloadStatus") or "").strip() == "completed"
-    ):
-        _complete_download_job_for_file(
-            db,
-            telegram_id=telegramId,
-            file_id=_int_or_default(file_record.get("id"), file_id),
-            unique_id=str(file_record.get("uniqueId") or ""),
-            local_path=str(file_record.get("localPath") or ""),
-            expected_size=_int_or_default(file_record.get("size"), 0),
-            downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
-        )
-
-    return file_record
+    except FileLifecycleNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileLifecycleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/{telegramId}/file/cancel-download")
@@ -222,64 +79,19 @@ async def file_cancel_download_route(
     if file_id == 0:
         raise HTTPException(status_code=400, detail="fileId is required.")
 
-    result = cancel_file_download(
-        db,
-        telegram_id=telegramId,
-        file_id=file_id,
-        unique_id=str(payload.get("uniqueId") or "").strip() or None,
-    )
-    if result is None:
-        td_manager = _tdlib_manager_from_app(request.app)
-        if td_manager is None:
-            raise HTTPException(status_code=404, detail="File not found")
-
-        config: AppConfig = request.app.state.config
-        account = get_telegram_account(
-            db,
-            telegram_id=telegramId,
-            app_root=str(config.app_root),
+    try:
+        await telegram_file_lifecycle(request.app).cancel(
+            FileReference(
+                telegram_id=telegramId,
+                file_id=file_id,
+                unique_id=str(payload.get("uniqueId") or "").strip(),
+                event_session_id=_session_id_from_request(request),
+            )
         )
-        if account is None:
-            raise HTTPException(status_code=404, detail="File not found")
-
-        unique_id = str(payload.get("uniqueId") or "").strip()
-        try:
-            result = await asyncio.to_thread(
-                _tdlib_cancel_download_fallback,
-                td_manager,
-                telegram_id=telegramId,
-                root_path=str(account.get("rootPath") or ""),
-                file_id=file_id,
-                unique_id=unique_id,
-            )
-            _db_update_tdlib_file_status(
-                db,
-                telegram_id=telegramId,
-                file_id=file_id,
-                unique_id=str(result.get("uniqueId") or unique_id),
-                status_payload=result,
-                allow_completed_reset=True,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    session_id = _session_id_from_request(request)
-    _cancel_download_job(
-        db,
-        telegram_id=telegramId,
-        file_id=file_id,
-        unique_id=str(result.get("uniqueId") or payload.get("uniqueId") or ""),
-    )
-    _stop_tdlib_download_monitor(
-        session_id=session_id,
-        telegram_id=telegramId,
-        file_id=file_id,
-    )
-    await _emit_tdlib_download_aggregate(session_id=session_id, telegram_id=telegramId)
-    await _emit_ws_payload(
-        _build_ws_payload(EVENT_TYPE_FILE_STATUS, result),
-        session_id=session_id,
-    )
+    except FileLifecycleNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileLifecycleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(status_code=200)
 
 
@@ -294,78 +106,20 @@ async def file_toggle_pause_download_route(
     if file_id == 0:
         raise HTTPException(status_code=400, detail="fileId is required.")
 
-    result = toggle_pause_file_download(
-        db,
-        telegram_id=telegramId,
-        file_id=file_id,
-        is_paused=_bool_or_none(payload.get("isPaused")),
-        unique_id=str(payload.get("uniqueId") or "").strip() or None,
-    )
-    if result is None:
-        td_manager = _tdlib_manager_from_app(request.app)
-        if td_manager is None:
-            raise HTTPException(status_code=404, detail="File not found")
-
-        config: AppConfig = request.app.state.config
-        account = get_telegram_account(
-            db,
-            telegram_id=telegramId,
-            app_root=str(config.app_root),
+    try:
+        await telegram_file_lifecycle(request.app).toggle_pause(
+            FileReference(
+                telegram_id=telegramId,
+                file_id=file_id,
+                unique_id=str(payload.get("uniqueId") or "").strip(),
+                event_session_id=_session_id_from_request(request),
+            ),
+            is_paused=_bool_or_none(payload.get("isPaused")),
         )
-        if account is None:
-            raise HTTPException(status_code=404, detail="File not found")
-
-        unique_id = str(payload.get("uniqueId") or "").strip()
-        try:
-            result, should_monitor = await asyncio.to_thread(
-                _tdlib_toggle_pause_download_fallback,
-                td_manager,
-                telegram_id=telegramId,
-                root_path=str(account.get("rootPath") or ""),
-                file_id=file_id,
-                unique_id=unique_id,
-                is_paused=_bool_or_none(payload.get("isPaused")),
-            )
-            _db_update_tdlib_file_status(
-                db,
-                telegram_id=telegramId,
-                file_id=file_id,
-                unique_id=str(result.get("uniqueId") or unique_id),
-                status_payload=result,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        session_id = _session_id_from_request(request)
-        if should_monitor:
-            _ensure_tdlib_download_monitor(
-                request.app,
-                session_id=session_id,
-                telegram_id=telegramId,
-                file_id=file_id,
-                unique_id=str(result.get("uniqueId") or unique_id),
-            )
-        else:
-            _stop_tdlib_download_monitor(
-                session_id=session_id,
-                telegram_id=telegramId,
-                file_id=file_id,
-            )
-            await _emit_tdlib_download_aggregate(
-                session_id=session_id,
-                telegram_id=telegramId,
-            )
-        await _emit_ws_payload(
-            _build_ws_payload(EVENT_TYPE_FILE_STATUS, result),
-            session_id=session_id,
-        )
-        return Response(status_code=200)
-
-    session_id = _session_id_from_request(request)
-    await _emit_ws_payload(
-        _build_ws_payload(EVENT_TYPE_FILE_STATUS, result),
-        session_id=session_id,
-    )
+    except FileLifecycleNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileLifecycleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(status_code=200)
 
 
@@ -381,63 +135,19 @@ async def file_remove_route(
     if file_id == 0 and not unique_id:
         raise HTTPException(status_code=400, detail="fileId or uniqueId is required.")
 
-    result = remove_file_download(
-        db,
-        telegram_id=telegramId,
-        file_id=file_id,
-        unique_id=unique_id or None,
-    )
-    if result is None:
-        td_manager = _tdlib_manager_from_app(request.app)
-        if td_manager is None:
-            raise HTTPException(status_code=404, detail="File not found")
-
-        config: AppConfig = request.app.state.config
-        account = get_telegram_account(
-            db,
-            telegram_id=telegramId,
-            app_root=str(config.app_root),
-        )
-        if account is None:
-            raise HTTPException(status_code=404, detail="File not found")
-
-        try:
-            result = await asyncio.to_thread(
-                _tdlib_remove_file_fallback,
-                td_manager,
+    try:
+        await telegram_file_lifecycle(request.app).remove(
+            FileReference(
                 telegram_id=telegramId,
-                root_path=str(account.get("rootPath") or ""),
                 file_id=file_id,
                 unique_id=unique_id,
+                event_session_id=_session_id_from_request(request),
             )
-            _db_update_tdlib_file_status(
-                db,
-                telegram_id=telegramId,
-                file_id=file_id,
-                unique_id=str(result.get("uniqueId") or unique_id),
-                status_payload=result,
-                allow_completed_reset=True,
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    session_id = _session_id_from_request(request)
-    _cancel_download_job(
-        db,
-        telegram_id=telegramId,
-        file_id=file_id,
-        unique_id=str(result.get("uniqueId") or unique_id),
-    )
-    _stop_tdlib_download_monitor(
-        session_id=session_id,
-        telegram_id=telegramId,
-        file_id=file_id,
-    )
-    await _emit_tdlib_download_aggregate(session_id=session_id, telegram_id=telegramId)
-    await _emit_ws_payload(
-        _build_ws_payload(EVENT_TYPE_FILE_STATUS, result),
-        session_id=session_id,
-    )
+        )
+    except FileLifecycleNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileLifecycleError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return Response(status_code=200)
 
 
@@ -559,8 +269,8 @@ async def files_start_download_multiple(
 ) -> dict[str, Any]:
     normalized_files = _parse_batch_files(payload)
     session_id = _session_id_from_request(request)
-    td_manager = _tdlib_manager_from_app(request.app)
     root_path_cache: dict[int, str | None] = {}
+    lifecycle = telegram_file_lifecycle(request.app)
 
     processed = 0
     failed = 0
@@ -574,130 +284,22 @@ async def files_start_download_multiple(
             failed += 1
             continue
 
-        file_record: dict[str, Any] | None = None
-        started_via_tdlib = False
-        tdlib_start_error = False
-        if td_manager is not None:
-            root_path = _tdlib_account_root_path(
-                request.app,
-                db,
-                item["telegramId"],
-                root_path_cache,
-            )
-            if root_path is not None:
-                _upsert_download_job(
-                    db,
+        try:
+            await lifecycle.start(
+                StartDownload(
                     telegram_id=item["telegramId"],
                     chat_id=item["chatId"],
                     message_id=item["messageId"],
                     file_id=item["fileId"],
-                    session_id=session_id,
                     source="manual",
-                )
-                _mark_download_job_starting(
-                    db,
-                    telegram_id=item["telegramId"],
-                    chat_id=item["chatId"],
-                    message_id=item["messageId"],
-                    file_id=item["fileId"],
-                )
-                try:
-                    file_record = await asyncio.to_thread(
-                        _start_tdlib_download_for_message,
-                        td_manager,
-                        db=db,
-                        telegram_id=item["telegramId"],
-                        root_path=root_path,
-                        chat_id=item["chatId"],
-                        message_id=item["messageId"],
-                        file_id=item["fileId"],
-                    )
-                    started_via_tdlib = True
-                    _db_upsert_tdlib_file_record(db, file_payload=file_record)
-                except Exception as exc:
-                    tdlib_start_error = True
-                    _mark_download_job_failed(
-                        db,
-                        telegram_id=item["telegramId"],
-                        chat_id=item["chatId"],
-                        message_id=item["messageId"],
-                        file_id=item["fileId"],
-                        error=str(exc),
-                    )
-                    logger.warning(
-                        "TDLib batch start failed telegram=%s chat=%s message=%s file=%s: %s",
-                        item["telegramId"],
-                        item["chatId"],
-                        item["messageId"],
-                        item["fileId"],
-                        exc,
-                    )
-
-        if file_record is None:
-            if tdlib_start_error:
-                failed += 1
-                continue
-
-            file_record = start_file_download(
-                db,
-                telegram_id=item["telegramId"],
-                chat_id=item["chatId"],
-                message_id=item["messageId"],
-                file_id=item["fileId"],
+                    event_session_id=session_id,
+                    monitor_session_id=session_id,
+                ),
+                root_path_cache=root_path_cache,
             )
-
-            if file_record is None:
-                failed += 1
-                continue
-
-        processed += 1
-        status_payload = (
-            _file_status_from_file_record(file_record)
-            if "messageId" in file_record
-            else _td_file_status_payload(file_record)
-        )
-        await _emit_ws_payload(
-            _build_ws_payload(
-                EVENT_TYPE_FILE_STATUS,
-                status_payload,
-            ),
-            session_id=session_id,
-        )
-
-        if (
-            started_via_tdlib
-            and str(file_record.get("downloadStatus") or "").strip() == "downloading"
-        ):
-            _mark_download_job_monitoring(
-                db,
-                telegram_id=item["telegramId"],
-                chat_id=item["chatId"],
-                message_id=item["messageId"],
-                file_id=item["fileId"],
-                unique_id=str(file_record.get("uniqueId") or ""),
-                expected_size=_int_or_default(file_record.get("size"), 0),
-                downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
-            )
-            _ensure_tdlib_download_monitor(
-                request.app,
-                session_id=session_id,
-                telegram_id=item["telegramId"],
-                file_id=_int_or_default(file_record.get("id"), item["fileId"]),
-                unique_id=str(file_record.get("uniqueId") or ""),
-            )
-        elif (
-            started_via_tdlib
-            and str(file_record.get("downloadStatus") or "").strip() == "completed"
-        ):
-            _complete_download_job_for_file(
-                db,
-                telegram_id=item["telegramId"],
-                file_id=_int_or_default(file_record.get("id"), item["fileId"]),
-                unique_id=str(file_record.get("uniqueId") or ""),
-                local_path=str(file_record.get("localPath") or ""),
-                expected_size=_int_or_default(file_record.get("size"), 0),
-                downloaded_size=_int_or_default(file_record.get("downloadedSize"), 0),
-            )
+            processed += 1
+        except FileLifecycleError:
+            failed += 1
 
     if processed == 0 and failed > 0:
         raise HTTPException(
@@ -719,8 +321,7 @@ async def files_cancel_download_multiple(
 ) -> dict[str, Any]:
     normalized_files = _parse_batch_files(payload)
     session_id = _session_id_from_request(request)
-    td_manager = _tdlib_manager_from_app(request.app)
-    root_path_cache: dict[int, str | None] = {}
+    lifecycle = telegram_file_lifecycle(request.app)
     changed_accounts: set[int] = set()
 
     processed = 0
@@ -730,73 +331,23 @@ async def files_cancel_download_multiple(
             failed += 1
             continue
 
-        result = cancel_file_download(
-            db,
-            telegram_id=item["telegramId"],
-            file_id=item["fileId"],
-            unique_id=item["uniqueId"] or None,
-        )
-
-        used_tdlib = False
-        if result is None:
-            if td_manager is not None:
-                root_path = _tdlib_account_root_path(
-                    request.app,
-                    db,
-                    item["telegramId"],
-                    root_path_cache,
-                )
-                if root_path is not None:
-                    try:
-                        result = await asyncio.to_thread(
-                            _tdlib_cancel_download_fallback,
-                            td_manager,
-                            telegram_id=item["telegramId"],
-                            root_path=root_path,
-                            file_id=item["fileId"],
-                            unique_id=item["uniqueId"],
-                        )
-                        _db_update_tdlib_file_status(
-                            db,
-                            telegram_id=item["telegramId"],
-                            file_id=item["fileId"],
-                            unique_id=str(result.get("uniqueId") or item["uniqueId"]),
-                            status_payload=result,
-                            allow_completed_reset=True,
-                        )
-                        used_tdlib = True
-                    except Exception:
-                        result = None
-
-            if result is None:
-                failed += 1
-                continue
-
-        processed += 1
-        _cancel_download_job(
-            db,
-            telegram_id=item["telegramId"],
-            file_id=item["fileId"],
-            unique_id=str(result.get("uniqueId") or item["uniqueId"]),
-        )
-        if used_tdlib:
-            _stop_tdlib_download_monitor(
-                session_id=session_id,
-                telegram_id=item["telegramId"],
-                file_id=item["fileId"],
+        try:
+            await lifecycle.cancel(
+                FileReference(
+                    telegram_id=item["telegramId"],
+                    file_id=item["fileId"],
+                    unique_id=item["uniqueId"],
+                    event_session_id=session_id,
+                ),
+                emit_aggregate=False,
             )
+            processed += 1
             changed_accounts.add(item["telegramId"])
-
-        await _emit_ws_payload(
-            _build_ws_payload(EVENT_TYPE_FILE_STATUS, result),
-            session_id=session_id,
-        )
+        except FileLifecycleError:
+            failed += 1
 
     for telegram_id in changed_accounts:
-        await _emit_tdlib_download_aggregate(
-            session_id=session_id,
-            telegram_id=telegram_id,
-        )
+        await lifecycle.refresh_download_aggregate(session_id, telegram_id)
 
     return {
         "processed": processed,
@@ -813,8 +364,7 @@ async def files_toggle_pause_download_multiple(
     normalized_files = _parse_batch_files(payload)
     is_paused = _bool_or_none(payload.get("isPaused"))
     session_id = _session_id_from_request(request)
-    td_manager = _tdlib_manager_from_app(request.app)
-    root_path_cache: dict[int, str | None] = {}
+    lifecycle = telegram_file_lifecycle(request.app)
     changed_accounts: set[int] = set()
 
     processed = 0
@@ -824,78 +374,24 @@ async def files_toggle_pause_download_multiple(
             failed += 1
             continue
 
-        result = toggle_pause_file_download(
-            db,
-            telegram_id=item["telegramId"],
-            file_id=item["fileId"],
-            is_paused=is_paused,
-            unique_id=item["uniqueId"] or None,
-        )
-
-        used_tdlib = False
-        should_monitor = False
-        if result is None:
-            if td_manager is not None:
-                root_path = _tdlib_account_root_path(
-                    request.app,
-                    db,
-                    item["telegramId"],
-                    root_path_cache,
-                )
-                if root_path is not None:
-                    try:
-                        result, should_monitor = await asyncio.to_thread(
-                            _tdlib_toggle_pause_download_fallback,
-                            td_manager,
-                            telegram_id=item["telegramId"],
-                            root_path=root_path,
-                            file_id=item["fileId"],
-                            unique_id=item["uniqueId"],
-                            is_paused=is_paused,
-                        )
-                        _db_update_tdlib_file_status(
-                            db,
-                            telegram_id=item["telegramId"],
-                            file_id=item["fileId"],
-                            unique_id=str(result.get("uniqueId") or item["uniqueId"]),
-                            status_payload=result,
-                        )
-                        used_tdlib = True
-                    except Exception:
-                        result = None
-
-            if result is None:
-                failed += 1
-                continue
-
-        processed += 1
-        if used_tdlib:
-            if should_monitor:
-                _ensure_tdlib_download_monitor(
-                    request.app,
-                    session_id=session_id,
+        try:
+            await lifecycle.toggle_pause(
+                FileReference(
                     telegram_id=item["telegramId"],
                     file_id=item["fileId"],
-                    unique_id=str(result.get("uniqueId") or item["uniqueId"]),
-                )
-            else:
-                _stop_tdlib_download_monitor(
-                    session_id=session_id,
-                    telegram_id=item["telegramId"],
-                    file_id=item["fileId"],
-                )
-                changed_accounts.add(item["telegramId"])
-
-        await _emit_ws_payload(
-            _build_ws_payload(EVENT_TYPE_FILE_STATUS, result),
-            session_id=session_id,
-        )
+                    unique_id=item["uniqueId"],
+                    event_session_id=session_id,
+                ),
+                is_paused=is_paused,
+                emit_aggregate=False,
+            )
+            processed += 1
+            changed_accounts.add(item["telegramId"])
+        except FileLifecycleError:
+            failed += 1
 
     for telegram_id in changed_accounts:
-        await _emit_tdlib_download_aggregate(
-            session_id=session_id,
-            telegram_id=telegram_id,
-        )
+        await lifecycle.refresh_download_aggregate(session_id, telegram_id)
 
     return {
         "processed": processed,
@@ -911,8 +407,7 @@ async def files_remove_multiple(
 ) -> dict[str, Any]:
     normalized_files = _parse_batch_files(payload)
     session_id = _session_id_from_request(request)
-    td_manager = _tdlib_manager_from_app(request.app)
-    root_path_cache: dict[int, str | None] = {}
+    lifecycle = telegram_file_lifecycle(request.app)
     changed_accounts: set[int] = set()
 
     processed = 0
@@ -922,73 +417,23 @@ async def files_remove_multiple(
             failed += 1
             continue
 
-        result = remove_file_download(
-            db,
-            telegram_id=item["telegramId"],
-            file_id=item["fileId"],
-            unique_id=item["uniqueId"] or None,
-        )
-
-        used_tdlib = False
-        if result is None:
-            if td_manager is not None:
-                root_path = _tdlib_account_root_path(
-                    request.app,
-                    db,
-                    item["telegramId"],
-                    root_path_cache,
-                )
-                if root_path is not None:
-                    try:
-                        result = await asyncio.to_thread(
-                            _tdlib_remove_file_fallback,
-                            td_manager,
-                            telegram_id=item["telegramId"],
-                            root_path=root_path,
-                            file_id=item["fileId"],
-                            unique_id=item["uniqueId"],
-                        )
-                        _db_update_tdlib_file_status(
-                            db,
-                            telegram_id=item["telegramId"],
-                            file_id=item["fileId"],
-                            unique_id=str(result.get("uniqueId") or item["uniqueId"]),
-                            status_payload=result,
-                            allow_completed_reset=True,
-                        )
-                        used_tdlib = True
-                    except Exception:
-                        result = None
-
-            if result is None:
-                failed += 1
-                continue
-
-        processed += 1
-        _cancel_download_job(
-            db,
-            telegram_id=item["telegramId"],
-            file_id=item["fileId"],
-            unique_id=str(result.get("uniqueId") or item["uniqueId"]),
-        )
-        if used_tdlib:
-            _stop_tdlib_download_monitor(
-                session_id=session_id,
-                telegram_id=item["telegramId"],
-                file_id=item["fileId"],
+        try:
+            await lifecycle.remove(
+                FileReference(
+                    telegram_id=item["telegramId"],
+                    file_id=item["fileId"],
+                    unique_id=item["uniqueId"],
+                    event_session_id=session_id,
+                ),
+                emit_aggregate=False,
             )
+            processed += 1
             changed_accounts.add(item["telegramId"])
-
-        await _emit_ws_payload(
-            _build_ws_payload(EVENT_TYPE_FILE_STATUS, result),
-            session_id=session_id,
-        )
+        except FileLifecycleError:
+            failed += 1
 
     for telegram_id in changed_accounts:
-        await _emit_tdlib_download_aggregate(
-            session_id=session_id,
-            telegram_id=telegram_id,
-        )
+        await lifecycle.refresh_download_aggregate(session_id, telegram_id)
 
     return {
         "processed": processed,
