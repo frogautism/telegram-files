@@ -7,7 +7,7 @@ import { LoaderPinwheel } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import FileVideo from "@/components/file-video";
 import FileInfo from "@/components/mobile/file-info";
-import { type useFiles } from "@/hooks/use-files";
+import type { FileFilter } from "@/lib/types";
 import useFileSwitch from "@/hooks/use-file-switch";
 import FileImage from "../file-image";
 
@@ -17,7 +17,12 @@ type FileDrawerProps = {
   file: TelegramFile;
   onFileChange: (file: TelegramFile) => void;
   onFileTagsClick: (file: TelegramFile) => void;
-} & ReturnType<typeof useFiles>;
+  filters: FileFilter;
+  setFilters: (filters: FileFilter) => Promise<void>;
+  hasMore: boolean;
+  loadMore: () => Promise<void>;
+  isLoading: boolean;
+};
 
 export default function FileDrawer({
   open,
@@ -26,9 +31,9 @@ export default function FileDrawer({
   onFileChange,
   onFileTagsClick,
   filters,
-  handleFilterChange,
+  setFilters,
   hasMore,
-  handleLoadMore,
+  loadMore,
   isLoading,
 }: FileDrawerProps) {
   const [viewing, setViewing] = useState(false);
@@ -45,7 +50,7 @@ export default function FileDrawer({
     file,
     onFileChange: handleFileChange,
     hasMore,
-    handleLoadMore,
+    handleLoadMore: loadMore,
   });
 
   useEffect(() => {
@@ -110,7 +115,7 @@ export default function FileDrawer({
   if (!file) return null;
 
   const handleTagClick = (tag: string) => {
-    void handleFilterChange({
+    void setFilters({
       ...filters,
       search: tag,
     });

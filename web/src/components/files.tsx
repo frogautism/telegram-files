@@ -2,52 +2,42 @@
 import FileList from "@/components/mobile/file-list";
 import { FileTable } from "@/components/file-table";
 import useIsMobile from "@/hooks/use-is-mobile";
+import type { FileWorkspaceConfig } from "@/hooks/use-file-workspace";
 
-export default function Files({
-  accountId,
-  chatId,
-  messageThreadId,
-  link,
-  source = "telegram",
-  sourceId,
-  onRefreshSource,
-  refreshSignal,
-}: {
-  accountId: string;
-  chatId: string;
-  messageThreadId?: number;
-  link?: string;
-  source?: "telegram" | "douyin";
-  sourceId?: string;
+type FilesProps = FileWorkspaceConfig & {
   onRefreshSource?: () => Promise<void>;
   refreshSignal?: number;
-}) {
+};
+
+export default function Files(props: FilesProps) {
   const isMobile = useIsMobile();
+  const commonProps = {
+    link: props.link,
+    onRefreshSource: props.onRefreshSource,
+    refreshSignal: props.refreshSignal,
+  };
 
   if (isMobile) {
-    return (
+    return props.source === "douyin" ? (
+      <FileList {...commonProps} source="douyin" sourceId={props.sourceId} />
+    ) : (
       <FileList
-        accountId={accountId}
-        chatId={chatId}
-        link={link}
-        source={source}
-        sourceId={sourceId}
-        onRefreshSource={onRefreshSource}
-        refreshSignal={refreshSignal}
-      />
-    );
-  } else {
-    return (
-      <FileTable
-        accountId={accountId}
-        chatId={chatId}
-        messageThreadId={messageThreadId}
-        link={link}
-        source={source}
-        sourceId={sourceId}
-        onRefreshSource={onRefreshSource}
-        refreshSignal={refreshSignal}
+        {...commonProps}
+        accountId={props.accountId}
+        chatId={props.chatId}
+        source="telegram"
       />
     );
   }
+  return props.source === "douyin" ? (
+    <FileTable {...commonProps} source="douyin" sourceId={props.sourceId} />
+  ) : (
+    <FileTable
+      {...commonProps}
+      accountId={props.accountId}
+      chatId={props.chatId}
+      messageThreadId={props.messageThreadId}
+      source="telegram"
+    />
+  );
 }

@@ -7,3 +7,7 @@ Telegram Files acquires files from messaging and media sources, tracks their pro
 **File lifecycle**:
 The sequence of states a managed file passes through from awaiting download to completion, cancellation, removal, or failure.
 _Avoid_: Download flow, file workflow
+
+**File workspace**:
+The currently viewed collection of managed files, including its filters, ordering, pagination, selection, and available file actions.
+_Avoid_: File list state, files hook

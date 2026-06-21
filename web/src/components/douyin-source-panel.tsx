@@ -37,7 +37,8 @@ export default function DouyinSourcePanel() {
     isLoading,
     mutate,
   } = useSWR<DouyinSource[]>("/douyin/sources");
-  const effectiveSourceId = selectedSourceId === "__all__" ? "" : selectedSourceId;
+  const effectiveSourceId =
+    selectedSourceId === "__all__" ? "" : selectedSourceId;
   const selectedSource = useMemo(
     () => sources.find((source) => source.id === effectiveSourceId),
     [effectiveSourceId, sources],
@@ -247,7 +248,10 @@ export default function DouyinSourcePanel() {
               <Switch checked={preloadOnly} onCheckedChange={setPreloadOnly} />
               Preload
             </label>
-            <Button onClick={() => void handleAdd()} disabled={!url.trim() || isMutating}>
+            <Button
+              onClick={() => void handleAdd()}
+              disabled={!url.trim() || isMutating}
+            >
               {isMutating ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
@@ -266,11 +270,11 @@ export default function DouyinSourcePanel() {
       </header>
 
       <Files
-        accountId="-1"
-        chatId="-1"
         source="douyin"
         sourceId={effectiveSourceId || undefined}
-        onRefreshSource={effectiveSourceId ? handleRefreshSelectedSource : undefined}
+        onRefreshSource={
+          effectiveSourceId ? handleRefreshSelectedSource : undefined
+        }
         refreshSignal={sourceRefreshSignal}
       />
 
