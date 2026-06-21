@@ -1,5 +1,6 @@
-import { type DownloadStatus, type TelegramFile } from "@/lib/types";
-import { useFileControl } from "@/hooks/use-file-control";
+import { type TelegramFile } from "@/lib/types";
+import type { FileAction } from "@/hooks/use-file-workspace-commands";
+import { useCurrentFileWorkspace } from "@/hooks/use-file-workspace";
 import { Button } from "@/components/ui/button";
 import {
   ArrowDown,
@@ -80,23 +81,15 @@ export default function FileControl({
     (file.downloadStatus === "downloading" || file.downloadStatus === "paused");
   const iconSize = isMobile ? "!h-3 !w-3" : "h-4 w-4";
 
-  const {
-    start,
-    starting,
-    togglePause,
-    togglingPause,
-    cancel,
-    cancelling,
-    remove,
-    removing,
-  } = useFileControl(file);
+  const { commands } = useCurrentFileWorkspace();
+  const fileActions = commands.actions(file);
+  const removeAction = fileActions.find(
+    (action) => action.command === "remove",
+  );
 
-  const removeBtnProps: ActionButtonProps = {
-    onClick: () => remove(file.id),
-    tooltipText: "Remove",
-    icon: <FileX className={iconSize} />,
-    loading: removing,
-  };
+  const removeBtnProps = removeAction
+    ? actionButtonProps(removeAction, iconSize)
+    : undefined;
 
   const replyBtnProps: ActionButtonProps = {
     onClick: () => {
@@ -142,54 +135,6 @@ export default function FileControl({
     loading: isMethodExecuting,
   };
 
-  const statusMapping: Record<DownloadStatus, ActionButtonProps[]> = {
-    idle: [
-      {
-        onClick: () => start(file.id),
-        tooltipText: "Start Download",
-        icon: <ArrowDown className={iconSize} />,
-        loading: starting,
-      },
-    ],
-    error: [
-      {
-        onClick: () => start(file.id),
-        tooltipText: "Retry",
-        icon: <ArrowDown className={iconSize} />,
-        loading: starting,
-      },
-    ],
-    downloading: [
-      {
-        onClick: () => togglePause(file.id),
-        tooltipText: "Pause",
-        icon: <Pause className={iconSize} />,
-        loading: togglingPause,
-      },
-      {
-        onClick: () => cancel(file.id),
-        tooltipText: "Cancel",
-        icon: <SquareX className={iconSize} />,
-        loading: cancelling,
-      },
-    ],
-    paused: [
-      {
-        onClick: () => togglePause(file.id),
-        tooltipText: "Resume",
-        icon: <StepForward className={iconSize} />,
-        loading: togglingPause,
-      },
-      {
-        onClick: () => cancel(file.id),
-        tooltipText: "Cancel",
-        icon: <SquareX className={iconSize} />,
-        loading: cancelling,
-      },
-    ],
-    completed: [removeBtnProps],
-  };
-
   const actionButtons = file.originalDeleted ? (
     <div className="w-full">
       <div
@@ -201,7 +146,9 @@ export default function FileControl({
             <Unlink className="h-4 w-4" />
           </Badge>
         </TooltipWrapper>
-        <ActionButton isMobile={isMobile} {...removeBtnProps} />
+        {removeBtnProps && (
+          <ActionButton isMobile={isMobile} {...removeBtnProps} />
+        )}
       </div>
     </div>
   ) : (
@@ -214,11 +161,11 @@ export default function FileControl({
           (chat?.kind === "group" || chat?.type === "channel") && (
             <ActionButton isMobile={isMobile} {...replyBtnProps} />
           )}
-        {statusMapping[file.downloadStatus].map((btnProps) => (
+        {fileActions.map((action) => (
           <ActionButton
-            key={btnProps.tooltipText}
+            key={action.command}
             isMobile={isMobile}
-            {...btnProps}
+            {...actionButtonProps(action, iconSize)}
           />
         ))}
       </div>
@@ -267,72 +214,46 @@ export default function FileControl({
 }
 
 export function MobileFileControl({ file }: { file: TelegramFile }) {
-  const {
-    start,
-    starting,
-    togglePause,
-    togglingPause,
-    cancel,
-    cancelling,
-    remove,
-    removing,
-  } = useFileControl(file);
+  const { commands } = useCurrentFileWorkspace();
+  const actions = commands.actions(file);
 
   return (
     <div className="flex w-full items-center justify-between space-x-2">
-      {(file.downloadStatus === "idle" || file.downloadStatus === "error") && (
-        <Button className="w-full" onClick={() => start(file.id)}>
-          {starting ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <ArrowDown className="h-4 w-4" />
-          )}
-          <span className="ml-2">Download</span>
-        </Button>
-      )}
-      {(file.downloadStatus === "downloading" ||
-        file.downloadStatus === "paused") && (
-        <>
-          <Button className="w-full" onClick={() => togglePause(file.id)}>
-            {togglingPause ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : file.downloadStatus === "downloading" ? (
-              <Pause className="h-4 w-4" />
-            ) : (
-              <StepForward className="h-4 w-4" />
-            )}
-            <span className="ml-2">
-              {file.downloadStatus === "downloading" ? "Pause" : "Resume"}
-            </span>
-          </Button>
-          <Button
-            variant="destructive"
-            className="w-full"
-            onClick={() => cancel(file.id)}
-          >
-            {cancelling ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <SquareX className="h-4 w-4" />
-            )}
-            <span className="ml-2">Cancel</span>
-          </Button>
-        </>
-      )}
-      {file.downloadStatus === "completed" && (
+      {actions.map((action) => (
         <Button
-          variant="outline"
+          key={action.command}
           className="w-full"
-          onClick={() => remove(file.id)}
+          variant={action.destructive ? "destructive" : "default"}
+          onClick={() => void action.run()}
         >
-          {removing ? (
+          {action.pending ? (
             <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            <FileX className="h-4 w-4" />
+            actionIcon(action.command, "h-4 w-4")
           )}
-          <span className="ml-2">Remove</span>
+          <span className="ml-2">{action.label}</span>
         </Button>
-      )}
+      ))}
     </div>
   );
+}
+
+function actionButtonProps(
+  action: FileAction,
+  iconSize: string,
+): ActionButtonProps {
+  return {
+    onClick: () => void action.run(),
+    tooltipText: action.tooltip,
+    icon: actionIcon(action.command, iconSize),
+    loading: action.pending,
+  };
+}
+
+function actionIcon(command: FileAction["command"], className: string) {
+  if (command === "start") return <ArrowDown className={className} />;
+  if (command === "pause") return <Pause className={className} />;
+  if (command === "resume") return <StepForward className={className} />;
+  if (command === "cancel") return <SquareX className={className} />;
+  return <FileX className={className} />;
 }

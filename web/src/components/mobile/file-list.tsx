@@ -1,6 +1,11 @@
 import { LoaderPinwheel, RefreshCw } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { useFiles } from "@/hooks/use-files";
+import {
+  FileWorkspaceProvider,
+  type FileWorkspace,
+  type FileWorkspaceConfig,
+  useFileWorkspace,
+} from "@/hooks/use-file-workspace";
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
 import { FileCard } from "@/components/mobile/file-card";
 import { cn } from "@/lib/utils";
@@ -16,33 +21,23 @@ import { getFileGroupKey } from "@/lib/file-groups";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
 
-interface FileListProps {
-  accountId: string;
-  chatId: string;
-  link?: string;
-  source?: "telegram" | "douyin";
-  sourceId?: string;
+type FileListProps = FileWorkspaceConfig & {
   onRefreshSource?: () => Promise<void>;
   refreshSignal?: number;
+};
+
+export default function FileList({ ...props }: FileListProps) {
+  const workspace = useFileWorkspace(props);
+  return (
+    <FileWorkspaceProvider workspace={workspace}>
+      <FileListContent {...props} workspace={workspace} />
+    </FileWorkspaceProvider>
+  );
 }
 
-export default function FileList({
-  accountId,
-  chatId,
-  link,
-  source = "telegram",
-  sourceId,
-  onRefreshSource,
-  refreshSignal,
-}: FileListProps) {
-  const useFilesProps = useFiles(
-    accountId,
-    chatId,
-    undefined,
-    link,
-    source,
-    sourceId,
-  );
+function FileListContent(props: FileListProps & { workspace: FileWorkspace }) {
+  const { link, onRefreshSource, refreshSignal, workspace } = props;
+  const isDouyin = props.source === "douyin";
   const [currentViewFile, setCurrentViewFile] = useState<
     TelegramFile | undefined
   >();
@@ -59,17 +54,14 @@ export default function FileList({
   );
 
   const {
-    filters,
-    updateField,
-    handleFilterChange,
-    clearFilters,
-    isLoading,
-    reload,
-    size,
-    files,
-    hasMore,
-    handleLoadMore,
-  } = useFilesProps;
+    query: { filters, isLoading, size, files, hasMore },
+    commands: {
+      setFilters: handleFilterChange,
+      clearFilters,
+      reload,
+      loadMore: handleLoadMore,
+    },
+  } = workspace;
 
   const handleTagClick = (tag: string) => {
     void handleFilterChange({
@@ -176,8 +168,15 @@ export default function FileList({
       {!link && (
         <DraggableElement>
           <FileFilters
-            telegramId={accountId}
-            chatId={chatId}
+            context={
+              isDouyin
+                ? { source: "douyin" }
+                : {
+                    source: "telegram",
+                    accountId: props.accountId,
+                    chatId: props.chatId,
+                  }
+            }
             filters={filters}
             onFiltersChange={handleFilterChange}
             clearFilters={clearFilters}
@@ -194,17 +193,16 @@ export default function FileList({
             setCurrentTagsFile(file);
             setIsTagsDrawerOpen(true);
           }}
-          {...useFilesProps}
+          filters={filters}
+          setFilters={handleFilterChange}
+          hasMore={hasMore}
+          loadMore={handleLoadMore}
+          isLoading={isLoading}
         />
       )}
       {currentTagsFile && (
         <MobileFileTagsDrawer
           file={currentTagsFile}
-          onTagsUpdate={(tags) => {
-            void updateField(currentTagsFile.uniqueId, {
-              tags: tags.join(","),
-            });
-          }}
           open={isTagsDrawerOpen}
           onOpenChange={setIsTagsDrawerOpen}
         />
@@ -300,7 +298,6 @@ export default function FileList({
                     : undefined
                 }
                 layout={layout}
-                {...useFilesProps}
               />
             );
           })}

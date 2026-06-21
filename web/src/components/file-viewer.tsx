@@ -2,12 +2,7 @@
 
 import { type TelegramFile } from "@/lib/types";
 import React, { useEffect, useState } from "react";
-import {
-  Dialog,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-} from "./ui/dialog";
+import { Dialog, DialogOverlay, DialogPortal, DialogTitle } from "./ui/dialog";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cn } from "@/lib/utils";
@@ -23,14 +18,14 @@ import {
 } from "lucide-react";
 import DouyinFrameGalleryDialog from "@/components/douyin-frame-gallery";
 import { AnimatePresence, motion } from "framer-motion";
-import { type useFiles } from "@/hooks/use-files";
+import type { FileFilter } from "@/lib/types";
 import FileExtra from "@/components/file-extra";
 import { Button } from "@/components/ui/button";
 import useFileSwitch from "@/hooks/use-file-switch";
 import FileImage from "./file-image";
 import SpoiledWrapper from "@/components/spoiled-wrapper";
 import FileCaptionText from "@/components/file-caption-text";
-import { useFileControl } from "@/hooks/use-file-control";
+import { useCurrentFileWorkspace } from "@/hooks/use-file-workspace";
 import prettyBytes from "pretty-bytes";
 import { formatDistanceToNow } from "date-fns";
 
@@ -39,7 +34,12 @@ type FileViewerProps = {
   onOpenChange: (open: boolean) => void;
   file: TelegramFile;
   onFileChange: (file: TelegramFile) => void;
-} & ReturnType<typeof useFiles>;
+  filters: FileFilter;
+  setFilters: (filters: FileFilter) => Promise<void>;
+  hasMore: boolean;
+  loadMore: () => Promise<void>;
+  isLoading: boolean;
+};
 
 export default function FileViewer({
   open,
@@ -47,9 +47,9 @@ export default function FileViewer({
   onFileChange,
   file,
   filters,
-  handleFilterChange,
+  setFilters,
   hasMore,
-  handleLoadMore,
+  loadMore,
   isLoading,
 }: FileViewerProps) {
   const [showInfo, setShowInfo] = useState(false);
@@ -58,9 +58,12 @@ export default function FileViewer({
     file,
     onFileChange,
     hasMore,
-    handleLoadMore,
+    handleLoadMore: loadMore,
   });
-  const { start, starting } = useFileControl(file);
+  const { commands } = useCurrentFileWorkspace();
+  const downloadAction = commands
+    .actions(file)
+    .find((action) => action.command === "start");
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -70,14 +73,12 @@ export default function FileViewer({
       else if (e.key === "i" || e.key === "I") setShowInfo((v) => !v);
       else if (e.key === "Escape") onOpenChange(false);
       else if (e.key === "d" || e.key === "D") {
-        if (file.downloadStatus === "idle" || file.downloadStatus === "error") {
-          void start(file.id);
-        }
+        void downloadAction?.run();
       }
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [handleNavigation, file, open, onOpenChange, start]);
+  }, [downloadAction, handleNavigation, file, open, onOpenChange]);
 
   const slideVariants = {
     enter: (d: number) => ({ x: d > 0 ? 80 : -80, opacity: 0 }),
@@ -89,12 +90,9 @@ export default function FileViewer({
 
   const showMessageCaption = shouldShowMessageCaption(file);
   const handleTagClick = (tag: string) => {
-    void handleFilterChange({ ...filters, search: tag });
+    void setFilters({ ...filters, search: tag });
     onOpenChange(false);
   };
-
-  const canDownload =
-    file.downloadStatus === "idle" || file.downloadStatus === "error";
 
   const canExtractFrames =
     file.source === "douyin" &&
@@ -104,7 +102,7 @@ export default function FileViewer({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPortal>
-        <DialogOverlay className="fixed inset-0 z-50 bg-[#0a0a0a]/97 backdrop-blur-md" />
+        <DialogOverlay className="bg-[#0a0a0a]/97 fixed inset-0 z-50 backdrop-blur-md" />
 
         <DialogPrimitive.Content
           data-fileid={file.id}
@@ -129,7 +127,7 @@ export default function FileViewer({
 
           {/* Top toolbar */}
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 bg-gradient-to-b from-black/70 to-transparent px-4 py-3 md:px-6">
-            <div className="flex items-center gap-3 min-w-0">
+            <div className="flex min-w-0 items-center gap-3">
               <div className="hidden text-[10px] uppercase tracking-[0.2em] text-white/50 md:inline">
                 Viewer
               </div>
@@ -150,15 +148,15 @@ export default function FileViewer({
             </div>
 
             <div className="flex items-center gap-1.5">
-              {canDownload && (
+              {downloadAction && (
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => start(file.id)}
-                  disabled={starting}
+                  onClick={() => void downloadAction.run()}
+                  disabled={downloadAction.pending}
                   className="text-white hover:bg-white/10 hover:text-white"
                 >
-                  {starting ? (
+                  {downloadAction.pending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <ArrowDown className="h-4 w-4" />
@@ -304,9 +302,7 @@ export default function FileViewer({
                           />
                         </SpoiledWrapper>
                       ) : (
-                        <p className="mt-2 italic text-white/40">
-                          No caption.
-                        </p>
+                        <p className="mt-2 italic text-white/40">No caption.</p>
                       )}
                     </div>
 
@@ -327,10 +323,7 @@ export default function FileViewer({
 
                     <div className="grid grid-cols-2 gap-3">
                       <Meta label="Size" value={prettyBytes(file.size)} />
-                      <Meta
-                        label="Type"
-                        value={capitalize(file.type)}
-                      />
+                      <Meta label="Type" value={capitalize(file.type)} />
                       <Meta
                         label="Status"
                         value={capitalize(file.downloadStatus)}

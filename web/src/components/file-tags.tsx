@@ -4,9 +4,6 @@ import React, { useEffect, useState } from "react";
 import { TagsSelector } from "@/components/ui/tags-selector";
 import { cn, split } from "@/lib/utils";
 import { useSettings } from "@/hooks/use-settings";
-import useSWRMutation from "swr/mutation";
-import { POST } from "@/lib/api";
-import { toast } from "@/hooks/use-toast";
 import { useDebounce } from "use-debounce";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./ui/hover-card";
 import * as HoverCardPrimitive from "@radix-ui/react-hover-card";
@@ -27,6 +24,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { useCurrentFileWorkspace } from "@/hooks/use-file-workspace";
+import { toast } from "@/hooks/use-toast";
 
 function useBatchUpdateTags({
   files,
@@ -36,55 +35,31 @@ function useBatchUpdateTags({
   onTagsUpdate?: (tags: string[]) => void;
 }) {
   const [tags, setTags] = useState<string[]>([]);
+  const [isMutating, setIsMutating] = useState(false);
+  const { commands } = useCurrentFileWorkspace();
 
   useEffect(() => {
     const allTags = files.flatMap((file) => split(",", file.tags ?? ""));
     setTags(Array.from(new Set(allTags)));
   }, [files]);
 
-  const { trigger, isMutating } = useSWRMutation(
-    files.some((file) => file.source === "douyin")
-      ? "/douyin/files/update-tags"
-      : "/files/update-tags",
-    (
-      key: string,
-      {
-        arg,
-      }: {
-        arg: {
-          files: Array<{
-            telegramId: number;
-            chatId: number;
-            messageId: number;
-            uniqueId: string;
-            fileId: number;
-          }>;
-          tags: string;
-        };
-      },
-    ) => POST(key, arg),
-    {
-      onSuccess: () => {
-        onTagsUpdate?.(tags);
-        toast({
-          variant: "success",
-          description: "Tags updated successfully",
-        });
-      },
-    },
-  );
-
   const toggleUpdateTags = async () => {
-    await trigger({
-      files: files.map((file) => ({
-        telegramId: file.telegramId ?? 0,
-        chatId: file.chatId ?? 0,
-        messageId: file.messageId ?? 0,
-        uniqueId: file.uniqueId ?? "",
-        fileId: file.id ?? 0,
-      })),
-      tags: tags.join(","),
-    });
+    setIsMutating(true);
+    try {
+      const outcome = await commands.updateTagsMany(files, tags);
+      if (!outcome.ok) {
+        toast({
+          title: "Tag update failed",
+          description: outcome.error,
+          variant: "error",
+        });
+        return;
+      }
+      toast({ variant: "success", description: "Tags updated successfully" });
+      onTagsUpdate?.(tags);
+    } finally {
+      setIsMutating(false);
+    }
   };
 
   const [debounceMutating] = useDebounce(isMutating, 200, {
@@ -108,26 +83,12 @@ function useUpdateTags({
   onTagsUpdate?: (tags: string[]) => void;
 }) {
   const [tags, setTags] = useState<string[]>(split(",", file?.tags));
+  const [isMutating, setIsMutating] = useState(false);
+  const { commands } = useCurrentFileWorkspace();
 
   useEffect(() => {
     setTags(split(",", file.tags));
   }, [file?.tags]);
-
-  const { trigger, isMutating } = useSWRMutation(
-    file.source === "douyin"
-      ? `/douyin/file/${file.uniqueId}/update-tags`
-      : `/file/${file.uniqueId}/update-tags`,
-    (key: string, { arg }: { arg: { tags: string } }) => POST(key, arg),
-    {
-      onSuccess: () => {
-        onTagsUpdate?.(tags);
-        toast({
-          variant: "success",
-          description: "Tags updated successfully",
-        });
-      },
-    },
-  );
 
   const toggleUpdateTags = async () => {
     if ((!file.tags || file.tags.length === 0) && tags.length === 0) {
@@ -137,7 +98,22 @@ function useUpdateTags({
     if (newTags === file.tags) {
       return;
     }
-    await trigger({ tags: newTags });
+    setIsMutating(true);
+    try {
+      const outcome = await commands.updateTags(file, tags);
+      if (!outcome.ok) {
+        toast({
+          title: "Tag update failed",
+          description: outcome.error,
+          variant: "error",
+        });
+        return;
+      }
+      toast({ variant: "success", description: "Tags updated successfully" });
+      onTagsUpdate?.(tags);
+    } finally {
+      setIsMutating(false);
+    }
   };
 
   const [debounceMutating] = useDebounce(isMutating, 200, {

@@ -8,8 +8,6 @@ import {
   StepForward,
 } from "lucide-react";
 import React, { useState } from "react";
-import useSWRMutation from "swr/mutation";
-import { POST } from "@/lib/api";
 import { type TelegramFile } from "@/lib/types";
 import { TooltipWrapper } from "@/components/ui/tooltip";
 import {
@@ -20,129 +18,30 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
-import { toast } from "@/hooks/use-toast";
 import { BatchFileTags } from "@/components/file-tags";
+import {
+  type BatchFileAction,
+  reportBatchOutcome,
+} from "@/hooks/use-file-workspace-commands";
+import { useCurrentFileWorkspace } from "@/hooks/use-file-workspace";
 
 interface FileBatchControlProps {
   selectedFiles: Set<number>;
   setSelectedFiles: (files: Set<number>) => void;
   files: TelegramFile[];
-  updateField?: (
-    uniqueId: string,
-    patch: Partial<TelegramFile>,
-  ) => Promise<void>;
 }
-
-type BatchActionResponse = {
-  processed?: number;
-  failed?: number;
-};
 
 export default function FileBatchControl({
   selectedFiles,
   setSelectedFiles,
   files,
-  updateField,
 }: FileBatchControlProps) {
+  const { commands } = useCurrentFileWorkspace();
   const selectedFileObjects = Array.from(selectedFiles)
     .map((id) => files.find((f) => f.id === id))
     .filter(Boolean) as TelegramFile[];
-
-  // Calculate counts for different file states
-  const downloadableCounts = selectedFileObjects.filter(
-    (file) => file.downloadStatus === "idle" || file.downloadStatus === "error",
-  ).length;
-  const pausableCounts = selectedFileObjects.filter(
-    (file) => file.downloadStatus === "downloading",
-  ).length;
-  const continuableCounts = selectedFileObjects.filter(
-    (file) => file.downloadStatus === "paused",
-  ).length;
-  const cancelableCounts = selectedFileObjects.filter(
-    (file) => file.downloadStatus === "downloading",
-  ).length;
-  const deletableCounts = selectedFileObjects.filter(
-    (file) => file.downloadStatus === "completed",
-  ).length;
   const loadedFiles = selectedFileObjects.filter((file) => file.loaded);
-
-  const controlButtons = [
-    {
-      url: selectedFileObjects.some((file) => file.source === "douyin")
-        ? "/douyin/files/start-download-multiple"
-        : "/files/start-download-multiple",
-      label: "Download",
-      tooltip: `Download ${downloadableCounts} selected files`,
-      icon: <Download className="mr-2 h-4 w-4" />,
-      filter: (file: TelegramFile) =>
-        file.downloadStatus === "idle" || file.downloadStatus === "error",
-      validCount: downloadableCounts,
-      showConfirm: downloadableCounts > 5,
-    },
-    {
-      url: selectedFileObjects.some((file) => file.source === "douyin")
-        ? "/douyin/files/toggle-pause-download-multiple"
-        : "/files/toggle-pause-download-multiple",
-      label: "Continue",
-      tooltip: `Continue ${continuableCounts} paused downloads`,
-      className: "bg-green-500 hover:bg-green-600 text-white",
-      icon: <StepForward className="mr-2 h-4 w-4" />,
-      filter: (file: TelegramFile) => file.downloadStatus === "paused",
-      validCount: continuableCounts,
-      showConfirm: false,
-    },
-    {
-      url: selectedFileObjects.some((file) => file.source === "douyin")
-        ? "/douyin/files/toggle-pause-download-multiple"
-        : "/files/toggle-pause-download-multiple",
-      label: "Pause",
-      tooltip: `Pause ${pausableCounts} active downloads`,
-      className: "bg-yellow-500 hover:bg-yellow-600 text-white",
-      icon: <Pause className="mr-2 h-4 w-4" />,
-      filter: (file: TelegramFile) => file.downloadStatus === "downloading",
-      validCount: pausableCounts,
-      showConfirm: false,
-    },
-    {
-      url: selectedFileObjects.some((file) => file.source === "douyin")
-        ? "/douyin/files/cancel-download-multiple"
-        : "/files/cancel-download-multiple",
-      label: "Cancel",
-      tooltip: `Cancel ${cancelableCounts} active downloads`,
-      className: "bg-red-500 hover:bg-red-600 text-white",
-      icon: <SquareX className="mr-2 h-4 w-4" />,
-      filter: (file: TelegramFile) => file.downloadStatus === "downloading",
-      validCount: cancelableCounts,
-      showConfirm: true,
-    },
-    {
-      url: selectedFileObjects.some((file) => file.source === "douyin")
-        ? "/douyin/files/remove-multiple"
-        : "/files/remove-multiple",
-      label: "Delete",
-      tooltip: `Delete ${deletableCounts} completed files`,
-      className: "bg-red-500 hover:bg-red-600 text-white",
-      icon: <FileX className="mr-2 h-4 w-4" />,
-      filter: (file: TelegramFile) => file.downloadStatus === "completed",
-      validCount: deletableCounts,
-      showConfirm: true,
-    },
-  ];
-
-  const handleTagsUpdate = (tags: string[]) => {
-    if (updateField) {
-      loadedFiles.forEach((file) => {
-        const newTags = tags.join(",");
-        void updateField(file.uniqueId, { tags: newTags });
-        setSelectedFiles(new Set());
-      });
-    }
-  };
-
-  // Filter buttons to only show those that have at least one valid file
-  const visibleButtons = controlButtons.filter(
-    (button) => button.validCount > 0,
-  );
+  const visibleActions = commands.batchActions(selectedFileObjects);
 
   return (
     <>
@@ -156,16 +55,15 @@ export default function FileBatchControl({
             {loadedFiles.length > 0 && (
               <BatchFileTags
                 files={loadedFiles}
-                onTagsUpdate={handleTagsUpdate}
+                onTagsUpdate={() => setSelectedFiles(new Set())}
               />
             )}
-            {visibleButtons.map((button) => (
+            {visibleActions.map((action) => (
               <ControlButton
-                key={button.label}
+                key={action.command}
+                action={action}
                 selectedFiles={selectedFiles}
                 setSelectedFiles={setSelectedFiles}
-                files={files}
-                {...button}
               />
             ))}
             <Button
@@ -182,113 +80,35 @@ export default function FileBatchControl({
   );
 }
 
-interface ControlButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  url: string;
-  label: string;
-  icon: React.ReactNode;
-  tooltip: string;
-  className?: string;
-  extra?: Record<string, any>;
-  filter: (file: TelegramFile) => boolean;
-  validCount: number;
-  showConfirm: boolean;
+interface ControlButtonProps {
+  action: BatchFileAction;
   selectedFiles: Set<number>;
   setSelectedFiles: (files: Set<number>) => void;
-  files: TelegramFile[];
 }
 
 function ControlButton({
-  url,
-  label,
-  icon,
-  tooltip,
-  className,
-  extra,
-  filter,
-  validCount,
-  showConfirm,
+  action,
   selectedFiles,
   setSelectedFiles,
-  files,
 }: ControlButtonProps) {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
-
-  const selectedFileObjects = Array.from(selectedFiles)
-    .map((id) => files.find((f) => f.id === id))
-    .filter(Boolean) as TelegramFile[];
-
-  // Calculate valid and invalid files based on the filter
-  const validFiles = selectedFileObjects.filter(filter);
-  const invalidCount = selectedFiles.size - validFiles.length;
-
-  const { trigger, isMutating } = useSWRMutation(
-    url,
-    (
-      key,
-      {
-        arg,
-      }: {
-        arg: {
-          files: Array<{
-            telegramId: number;
-            chatId: number;
-            messageId: number;
-            fileId: number;
-            uniqueId: string;
-          }>; 
-        } & Record<string, any>;
-      },
-    ) => POST(key, arg),
-  );
+  const [isMutating, setIsMutating] = useState(false);
+  const invalidCount = selectedFiles.size - action.count;
 
   const handleAction = async () => {
+    setIsMutating(true);
     try {
-      const result = (await trigger({
-        files: validFiles.map((file) => ({
-          telegramId: file.telegramId ?? 0,
-          chatId: file.chatId ?? 0,
-          messageId: file.messageId ?? 0,
-          fileId: file.id ?? 0,
-          uniqueId: file.uniqueId,
-        })),
-        ...extra,
-      })) as BatchActionResponse | undefined;
-
-      const processed = Math.max(0, Number(result?.processed ?? validFiles.length));
-      const failed = Math.max(0, Number(result?.failed ?? 0));
-
-      if (processed === 0 && failed > 0) {
-        toast({
-          title: `${label} failed`,
-          description: "None of the selected files could be processed.",
-          variant: "error",
-        });
-        return;
+      if (reportBatchOutcome(action.label, await action.run())) {
+        setSelectedFiles(new Set());
       }
-
-      setSelectedFiles(new Set());
-
-      if (failed > 0) {
-        toast({
-          title: `${label} completed with skips`,
-          description: `Processed ${processed} files and skipped ${failed}.`,
-          variant: "warning",
-        });
-        return;
-      }
-
-      toast({
-        title: `${label} action completed`,
-        description: `Successfully processed ${processed} files.`,
-        variant: "success",
-      });
     } finally {
+      setIsMutating(false);
       setConfirmDialogOpen(false);
     }
   };
 
   const handleClick = () => {
-    if (showConfirm) {
+    if (action.confirm) {
       setConfirmDialogOpen(true);
     } else {
       void handleAction();
@@ -297,12 +117,18 @@ function ControlButton({
 
   return (
     <>
-      <TooltipWrapper content={tooltip}>
+      <TooltipWrapper
+        content={`${action.label} ${action.availableCount} available files${
+          action.blockedCount > 0
+            ? ` (${action.blockedCount} already in progress)`
+            : ""
+        }`}
+      >
         <Button
           size="sm"
-          className={className}
+          className={actionClassName(action.command)}
           onClick={handleClick}
-          disabled={validCount === 0 || isMutating}
+          disabled={action.availableCount === 0 || isMutating}
         >
           {isMutating ? (
             <LoaderCircle
@@ -311,8 +137,8 @@ function ControlButton({
             />
           ) : (
             <>
-              {icon}
-              {label} {validCount > 0 && `(${validCount})`}
+              {actionIcon(action.command)}
+              {action.label} ({action.availableCount})
             </>
           )}
         </Button>
@@ -322,22 +148,22 @@ function ControlButton({
         <DialogContent className="max-w-xl sm:max-w-md">
           <DialogHeader className="space-y-2">
             <DialogTitle className="text-center text-xl font-semibold">
-              {`Confirm ${label} Action`}
+              {`Confirm ${action.label} Action`}
             </DialogTitle>
             <div className="flex justify-center">
-              {label === "Delete" ? (
+              {action.command === "remove" ? (
                 <div className="rounded-full bg-red-100 p-3 dark:bg-red-900/30">
                   <FileX className="h-6 w-6 text-red-600 dark:text-red-400" />
                 </div>
-              ) : label === "Cancel" ? (
+              ) : action.command === "cancel" ? (
                 <div className="rounded-full bg-red-100 p-3 dark:bg-red-900/30">
                   <SquareX className="h-6 w-6 text-red-600 dark:text-red-400" />
                 </div>
-              ) : label === "Download" ? (
+              ) : action.command === "start" ? (
                 <div className="rounded-full bg-blue-100 p-3 dark:bg-blue-900/30">
                   <Download className="h-6 w-6 text-blue-600 dark:text-blue-400" />
                 </div>
-              ) : label === "Continue" ? (
+              ) : action.command === "resume" ? (
                 <div className="rounded-full bg-green-100 p-3 dark:bg-green-900/30">
                   <StepForward className="h-6 w-6 text-green-600 dark:text-green-400" />
                 </div>
@@ -351,11 +177,12 @@ function ControlButton({
 
           <div className="pb-6 pt-2">
             <p className="mb-3 text-center text-sm text-muted-foreground">
-              Are you sure you want to {label.toLowerCase()} the selected files?
+              Are you sure you want to {action.label.toLowerCase()} the selected
+              files?
             </p>
 
             <div className="mt-4 flex flex-col gap-3">
-              {validCount > 0 && (
+              {action.availableCount > 0 && (
                 <div className="overflow-hidden rounded-lg border border-green-200 dark:border-green-800">
                   <div className="border-b border-green-200 bg-green-50 px-4 py-2 dark:border-green-800 dark:bg-green-900/20">
                     <span className="text-sm font-medium text-green-800 dark:text-green-300">
@@ -365,18 +192,34 @@ function ControlButton({
                   <div className="flex items-center bg-white p-4 dark:bg-background">
                     <div className="mr-3 flex h-8 w-8 items-center justify-center rounded-full bg-green-100 dark:bg-green-900/30">
                       <span className="text-sm font-semibold text-green-700 dark:text-green-300">
-                        {validCount}
+                        {action.availableCount}
                       </span>
                     </div>
                     <div>
                       <p className="text-sm font-medium">
-                        {validCount} {validCount === 1 ? "file" : "files"} will
-                        be processed
+                        {action.availableCount}{" "}
+                        {action.availableCount === 1 ? "file" : "files"} will be
+                        processed
                       </p>
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         These files are in the correct state for this operation
                       </p>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {action.blockedCount > 0 && (
+                <div className="overflow-hidden rounded-lg border border-yellow-200 dark:border-yellow-800">
+                  <div className="border-b border-yellow-200 bg-yellow-50 px-4 py-2 dark:border-yellow-800 dark:bg-yellow-900/20">
+                    <span className="text-sm font-medium text-yellow-800 dark:text-yellow-300">
+                      Files already in progress
+                    </span>
+                  </div>
+                  <div className="bg-white p-4 text-sm dark:bg-background">
+                    {action.blockedCount}{" "}
+                    {action.blockedCount === 1 ? "file is" : "files are"} locked
+                    by another action and will be skipped.
                   </div>
                 </div>
               )}
@@ -421,20 +264,40 @@ function ControlButton({
                 void handleAction();
               }}
               className={`min-w-24 ${
-                label === "Delete" || label === "Cancel"
+                action.destructive
                   ? "bg-red-500 text-white hover:bg-red-600"
-                  : label === "Continue"
+                  : action.command === "resume"
                     ? "bg-green-500 text-white hover:bg-green-600"
-                    : label === "Pause"
+                    : action.command === "pause"
                       ? "bg-yellow-500 text-white hover:bg-yellow-600"
                       : ""
               }`}
+              disabled={action.availableCount === 0 || isMutating}
             >
-              {`${label}`}
+              {action.label}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
   );
+}
+
+function actionIcon(command: BatchFileAction["command"]) {
+  const className = "mr-2 h-4 w-4";
+  if (command === "start") return <Download className={className} />;
+  if (command === "resume") return <StepForward className={className} />;
+  if (command === "pause") return <Pause className={className} />;
+  if (command === "cancel") return <SquareX className={className} />;
+  return <FileX className={className} />;
+}
+
+function actionClassName(command: BatchFileAction["command"]) {
+  if (command === "resume") return "bg-green-500 hover:bg-green-600 text-white";
+  if (command === "pause")
+    return "bg-yellow-500 hover:bg-yellow-600 text-white";
+  if (command === "cancel" || command === "remove") {
+    return "bg-red-500 hover:bg-red-600 text-white";
+  }
+  return undefined;
 }

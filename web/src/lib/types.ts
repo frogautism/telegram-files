@@ -40,7 +40,7 @@ export type DownloadStatus =
 export type TransferStatus = "idle" | "transferring" | "completed" | "error";
 
 export type TelegramFile = {
-  source?: "telegram" | "douyin";
+  source: "telegram" | "douyin";
   id: number;
   telegramId: number;
   uniqueId: string;

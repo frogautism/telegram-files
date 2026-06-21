@@ -17,7 +17,13 @@ import {
   SquareCheckBig,
   WandSparkles,
 } from "lucide-react";
-import { useFiles } from "@/hooks/use-files";
+import {
+  FileWorkspaceProvider,
+  type FileWorkspace,
+  type FileWorkspaceConfig,
+  useCurrentFileWorkspace,
+  useFileWorkspace,
+} from "@/hooks/use-file-workspace";
 import FileNotFound from "@/components/file-not-found";
 import type { TelegramFile } from "@/lib/types";
 import FileViewer from "@/components/file-viewer";
@@ -35,60 +41,47 @@ import SpoiledWrapper from "@/components/spoiled-wrapper";
 import FileCaptionText from "@/components/file-caption-text";
 import { groupFilesByMessage, type FileGroup } from "@/lib/file-groups";
 import { formatDistanceToNow } from "date-fns";
-import useSWRMutation from "swr/mutation";
-import { POST } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
+import { reportBatchOutcome } from "@/hooks/use-file-workspace-commands";
 import { MediaGridSkeleton } from "@/components/ui/skeleton";
 import { TooltipWrapper } from "@/components/ui/tooltip";
 
-interface FileTableProps {
-  accountId: string;
-  chatId: string;
-  messageThreadId?: number;
-  link?: string;
-  source?: "telegram" | "douyin";
-  sourceId?: string;
+type FileTableProps = FileWorkspaceConfig & {
   onRefreshSource?: () => Promise<void>;
   refreshSignal?: number;
-}
+};
 
 type Density = "compact" | "comfortable" | "detail";
 
 const DENSITY_KEY = "telefiles:grid-density";
 
-export function FileTable({
-  accountId,
-  chatId,
-  messageThreadId,
-  link,
-  source = "telegram",
-  sourceId,
-  onRefreshSource,
-  refreshSignal,
-}: FileTableProps) {
+export function FileTable({ ...props }: FileTableProps) {
+  const workspace = useFileWorkspace(props);
+  return (
+    <FileWorkspaceProvider workspace={workspace}>
+      <FileTableContent {...props} workspace={workspace} />
+    </FileWorkspaceProvider>
+  );
+}
+
+function FileTableContent(
+  props: FileTableProps & { workspace: FileWorkspace },
+) {
+  const { link, onRefreshSource, refreshSignal, workspace } = props;
+  const isDouyin = props.source === "douyin";
+  const messageThreadId = isDouyin ? undefined : props.messageThreadId;
+  const source = isDouyin ? "douyin" : "telegram";
   const [selectedFiles, setSelectedFiles] = useState<Set<number>>(new Set());
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const useFilesProps = useFiles(
-    accountId,
-    chatId,
-    messageThreadId,
-    link,
-    source,
-    sourceId,
-  );
   const {
-    filters,
-    updateField,
-    handleFilterChange,
-    clearFilters,
-    isLoading,
-    reload,
-    size,
-    files,
-    hasMore,
-    totalCount,
-    handleLoadMore,
-  } = useFilesProps;
+    query: { filters, isLoading, size, files, hasMore, totalCount },
+    commands: {
+      setFilters: handleFilterChange,
+      clearFilters,
+      reload,
+      loadMore: handleLoadMore,
+    },
+  } = workspace;
   const [currentViewFile, setCurrentViewFile] = useState<
     TelegramFile | undefined
   >();
@@ -220,11 +213,11 @@ export function FileTable({
     ? "Linked board"
     : source === "douyin"
       ? "Douyin"
-    : messageThreadId
-      ? "Thread"
-      : filters.type === "media"
-        ? "Media"
-        : capitalize(filters.type);
+      : messageThreadId
+        ? "Thread"
+        : filters.type === "media"
+          ? "Media"
+          : capitalize(filters.type);
 
   return (
     <>
@@ -234,7 +227,11 @@ export function FileTable({
           onOpenChange={setViewerOpen}
           file={currentViewFile}
           onFileChange={setCurrentViewFile}
-          {...useFilesProps}
+          filters={filters}
+          setFilters={handleFilterChange}
+          hasMore={hasMore}
+          loadMore={handleLoadMore}
+          isLoading={isLoading}
         />
       )}
 
@@ -262,9 +259,7 @@ export function FileTable({
                   </span>
                 ) : (
                   <>
-                    <span className="font-mono tabular-nums">
-                      {totalCount}
-                    </span>{" "}
+                    <span className="font-mono tabular-nums">{totalCount}</span>{" "}
                     {totalCount === 1 ? "item" : "items"}
                     {activeFilterCount > 0 && (
                       <>
@@ -318,8 +313,15 @@ export function FileTable({
 
           {!link && (
             <FileFilters
-              telegramId={accountId}
-              chatId={chatId}
+              context={
+                isDouyin
+                  ? { source: "douyin" }
+                  : {
+                      source: "telegram",
+                      accountId: props.accountId,
+                      chatId: props.chatId,
+                    }
+              }
               filters={filters}
               onFiltersChange={handleFilterChange}
               clearFilters={clearFilters}
@@ -338,9 +340,7 @@ export function FileTable({
                 onClick={toggleSelectAll}
                 className="text-foreground underline-offset-2 hover:underline"
               >
-                {allVisibleSelected
-                  ? "Clear selection"
-                  : "Select all visible"}
+                {allVisibleSelected ? "Clear selection" : "Select all visible"}
               </button>
             </div>
           )}
@@ -350,7 +350,6 @@ export function FileTable({
           files={files}
           selectedFiles={selectedFiles}
           setSelectedFiles={setSelectedFiles}
-          updateField={updateField}
         />
 
         <div>
@@ -692,84 +691,33 @@ function MediaTile({
 }
 
 function MessageGroupDownloadButton({ files }: { files: TelegramFile[] }) {
-  const downloadableFiles = files.filter(
-    (f) => f.downloadStatus === "idle" || f.downloadStatus === "error",
-  );
-  const { trigger, isMutating } = useSWRMutation(
-    "/files/start-download-multiple",
-    (
-      key,
-      {
-        arg,
-      }: {
-        arg: {
-          files: Array<{
-            telegramId: number;
-            chatId: number;
-            messageId: number;
-            fileId: number;
-            uniqueId: string;
-          }>;
-        };
-      },
-    ) => POST(key, arg),
-  );
+  const { commands } = useCurrentFileWorkspace();
+  const downloadAction = commands
+    .batchActions(files)
+    .find((action) => action.command === "start");
+  const [isMutating, setIsMutating] = useState(false);
 
-  if (downloadableFiles.length === 0) return null;
+  if (!downloadAction) return null;
 
   const handleClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    setIsMutating(true);
     try {
-      const result = (await trigger({
-        files: downloadableFiles.map((file) => ({
-          telegramId: file.telegramId ?? 0,
-          chatId: file.chatId ?? 0,
-          messageId: file.messageId ?? 0,
-          fileId: file.id ?? 0,
-          uniqueId: file.uniqueId,
-        })),
-      })) as { processed?: number; failed?: number } | undefined;
-
-      const processed = Math.max(
-        0,
-        Number(result?.processed ?? downloadableFiles.length),
-      );
-      const failed = Math.max(0, Number(result?.failed ?? 0));
-
-      if (processed === 0 && failed > 0) {
-        toast({
-          title: "Download failed",
-          description: "None of the items in this message could be started.",
-          variant: "error",
-        });
-        return;
-      }
-
-      toast({
-        title: failed > 0 ? "Started with skips" : "Download started",
-        description:
-          failed > 0
-            ? `Started ${processed} items, skipped ${failed}.`
-            : `Started ${processed} items from this message.`,
-        variant: failed > 0 ? "warning" : "success",
+      reportBatchOutcome("Download", await downloadAction.run(), {
+        itemNoun: "item",
       });
-    } catch (error) {
-      toast({
-        title: "Download failed",
-        description:
-          error instanceof Error ? error.message : "Failed to start download.",
-        variant: "error",
-      });
+    } finally {
+      setIsMutating(false);
     }
   };
 
   return (
-    <TooltipWrapper content={`Download all (${downloadableFiles.length})`}>
+    <TooltipWrapper content={`Download all (${downloadAction.count})`}>
       <Button
         size="icon-xs"
         variant="soft"
         onClick={handleClick}
-        disabled={isMutating}
+        disabled={isMutating || downloadAction.availableCount === 0}
       >
         {isMutating ? (
           <Loader2 className="h-3 w-3 animate-spin" />

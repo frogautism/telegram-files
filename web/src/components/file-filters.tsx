@@ -60,21 +60,23 @@ const TYPE_OPTIONS: Array<{ value: FileType | "all"; label: string }> = [
 ];
 
 interface FileFiltersProps {
-  telegramId: string;
-  chatId: string;
+  context:
+    | { source: "telegram"; accountId: string; chatId: string }
+    | { source: "douyin" };
   filters: FileFilter;
   onFiltersChange: (filters: FileFilter) => void;
   clearFilters: () => void;
 }
 
 export default function FileFilters({
-  telegramId,
-  chatId,
+  context,
   filters,
   onFiltersChange,
   clearFilters,
 }: FileFiltersProps) {
-  const noAccountSpecified = telegramId === "-1" && chatId === "-1";
+  const noAccountSpecified =
+    context.source === "douyin" ||
+    (context.accountId === "-1" && context.chatId === "-1");
   const isMobile = useIsMobile();
   const [searchValue, setSearchValue] = useState(filters.search);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -219,7 +221,7 @@ export default function FileFilters({
           </div>
         )}
 
-        {!noAccountSpecified && (
+        {context.source === "telegram" && !noAccountSpecified && (
           <div className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs shadow-card">
             <Label
               htmlFor="offline-mode"
@@ -516,10 +518,7 @@ function DateField({
 }: {
   dateType: "sent" | "downloaded" | undefined;
   dateRange: [string, string] | undefined;
-  onChange: (
-    type: "sent" | "downloaded",
-    range: [string, string],
-  ) => void;
+  onChange: (type: "sent" | "downloaded", range: [string, string]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const isMobile = useIsMobile();
